@@ -1,0 +1,41 @@
+{
+  "name": "knowledge-hub",
+  "displayName": "Knowledge Hub",
+  "version": "0.1.0",
+  "description": "Guided onboarding for your Knowledge Hub wiki, plus per-session canon sync.",
+  "author": {
+    "name": "Knowledge Hub",
+    "url": "https://knowledgehub.com"
+  },
+  "homepage": "https://knowledgehub.com",
+  "keywords": ["onboarding", "wiki", "knowledge-management"],
+  "userConfig": {
+    "api_base_url": {
+      "type": "string",
+      "title": "API base URL",
+      "description": "Knowledge Hub SaaS API base. Use https://api.knowledgehub.com in production, or http://localhost:5173 for local dev."
+    }
+  },
+  "mcpServers": {
+    "knowledge-hub": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/server.js"],
+      "env": {
+        "KH_API_BASE_URL": "${user_config.api_base_url}"
+      }
+    }
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/sync-canon.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

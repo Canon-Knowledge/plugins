@@ -1,0 +1,12 @@
+{
+  "name": "canon-knowledge-plugins",
+  "owner": {
+    "name": "Canon Knowledge"
+  },
+  "plugins": [
+    {
+      "name": "knowledge-hub",
+      "source": "./knowledge-hub"
+    }
+  ]
+}
