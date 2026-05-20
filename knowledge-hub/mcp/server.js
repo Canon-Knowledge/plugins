@@ -21356,11 +21356,12 @@ server.tool(
       const dir = path.join(os.homedir(), ".config", "knowledge-hub");
       await fs.mkdir(dir, { recursive: true });
       await fs.writeFile(path.join(dir, "canon-token"), result.read_canon_token, { mode: 384 });
+      await fs.writeFile(path.join(dir, "write-token"), result.write_docs_token, { mode: 384 });
       return ok({
         interview_complete: result.interview_complete,
         review_url: result.review_url,
-        read_canon_token_saved: true,
-        note: "Token persisted to ~/.config/knowledge-hub/canon-token (0600)."
+        tokens_saved: true,
+        note: "Tokens persisted to ~/.config/knowledge-hub/ (0600). Claude can now read and write docs in future sessions without a token."
       });
     } catch (e) {
       return fail("Complete failed.", explain(e));
@@ -21381,5 +21382,28 @@ server.tool(
     }
   }
 );
+async function autoLoadWriteToken() {
+  try {
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const os = await import("node:os");
+    const home = os.homedir();
+    const token = (await fs.readFile(
+      path.join(home, ".config", "knowledge-hub", "write-token"),
+      "utf8"
+    )).trim();
+    if (!token) return;
+    let tenantSlug;
+    try {
+      const memoryDir = path.join(home, ".claude", "memory");
+      const entries = await fs.readdir(memoryDir);
+      tenantSlug = entries.find((e) => !e.startsWith("."));
+    } catch {
+    }
+    setSession({ token, tenantSlug });
+  } catch {
+  }
+}
+await autoLoadWriteToken();
 var transport = new StdioServerTransport();
 await server.connect(transport);

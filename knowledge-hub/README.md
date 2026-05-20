@@ -1,5 +1,11 @@
 # Knowledge Hub plugin
 
+> **Dual-repo notice** — this directory is the source of truth, but users
+> install the plugin from the **public** repo at
+> [Canon-Knowledge/plugins](https://github.com/Canon-Knowledge/plugins).
+> After any change here, run `scripts/deploy-plugin.sh` from the repo root
+> to sync it. The script is idempotent — if nothing changed it exits cleanly.
+
 Adds the `/onboard` slash command to Claude Code. The command conducts
 a guided interview with a company admin and drafts the first version
 of their Knowledge Hub wiki. After onboarding, a `PreToolUse` hook

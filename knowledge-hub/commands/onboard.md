@@ -68,7 +68,11 @@ When invoked as `/onboard <token>`:
      admin which stages already have drafts ("I see a company doc and
      two teams are already captured") and ask whether to continue from
      the next stage or redo from scratch. Default: continue.
-   - `completed` → say "onboarding is already done" and stop.
+   - `completed` → onboarding is done; skip the interview. Call
+     `complete_onboarding` immediately to mint fresh read/write tokens
+     and save them to disk. Tell the admin: "Your workspace is already
+     set up. Write access has been refreshed — Claude can now create
+     and update docs directly." Stop.
 3. Greet the admin by tenant name. Set expectations: ~45 minutes,
    breaks fine, you'll produce drafts they'll review and approve later.
 4. Call `emit_event("onboarding_started")`.
@@ -155,8 +159,11 @@ For each accepted project: same loop as processes, with `doc_type:
 - **Drive `connected: false`:** SaaS Drive integration is unconfigured
   for this tenant. Fall back to manual team listing without comment —
   the admin doesn't need to debug it.
-- **MCP tool throws "No active token":** the MCP server restarted. Ask
-  the admin to re-run `/onboard <same-token>` to re-verify.
+- **MCP tool throws "No active token":** no write-token is saved on
+  disk yet. Ask the admin to generate a token at `/onboarding` and
+  run `/knowledge-hub:onboard <token>`. Because status will be
+  `completed`, this only takes a few seconds and saves the token to
+  disk so it never needs to happen again.
 
 ## Quality bar
 
