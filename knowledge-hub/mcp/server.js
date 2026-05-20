@@ -21150,6 +21150,40 @@ var KH_API_BASE_URL = process.env.KH_API_BASE_URL || process.env.CLAUDE_PLUGIN_O
 function cfg(token) {
   return { baseUrl: KH_API_BASE_URL, token: token ?? getSession().token };
 }
+async function saveTokenFile(filePath, data) {
+  const fs = await import("node:fs/promises");
+  await fs.writeFile(filePath, JSON.stringify(data, null, 2), { mode: 384 });
+}
+async function readTokenFile(filePath) {
+  try {
+    const fs = await import("node:fs/promises");
+    const raw = await fs.readFile(filePath, "utf8");
+    if (!raw.trim().startsWith("{")) return { token: raw.trim(), expires_at: "" };
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+function expiresSoon(expiresAt) {
+  if (!expiresAt) return true;
+  return new Date(expiresAt).getTime() - Date.now() < 30 * 24 * 60 * 60 * 1e3;
+}
+async function refreshTokenFile(filePath, currentToken) {
+  const result = await request(
+    { baseUrl: KH_API_BASE_URL, token: currentToken },
+    "POST",
+    "/api/tokens/refresh"
+  );
+  await saveTokenFile(filePath, result);
+  return result.token;
+}
+function getSessionSafe() {
+  try {
+    return getSession();
+  } catch {
+    return null;
+  }
+}
 function ok(payload) {
   return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
 }
@@ -21355,13 +21389,14 @@ server.tool(
       const os = await import("node:os");
       const dir = path.join(os.homedir(), ".config", "knowledge-hub");
       await fs.mkdir(dir, { recursive: true });
-      await fs.writeFile(path.join(dir, "canon-token"), result.read_canon_token, { mode: 384 });
-      await fs.writeFile(path.join(dir, "write-token"), result.write_docs_token, { mode: 384 });
+      await saveTokenFile(path.join(dir, "canon-token.json"), result.tokens.read_canon);
+      await saveTokenFile(path.join(dir, "write-token.json"), result.tokens.write_docs);
+      setSession({ ...getSessionSafe(), token: result.tokens.write_docs.token });
       return ok({
         interview_complete: result.interview_complete,
         review_url: result.review_url,
         tokens_saved: true,
-        note: "Tokens persisted to ~/.config/knowledge-hub/ (0600). Claude can now read and write docs in future sessions without a token."
+        note: "Tokens saved to ~/.config/knowledge-hub/ and auto-refresh monthly. Claude can now read and write docs without any further setup."
       });
     } catch (e) {
       return fail("Complete failed.", explain(e));
@@ -21384,17 +21419,24 @@ server.tool(
 );
 async function autoLoadWriteToken() {
   try {
-    const fs = await import("node:fs/promises");
     const path = await import("node:path");
     const os = await import("node:os");
     const home = os.homedir();
-    const token = (await fs.readFile(
-      path.join(home, ".config", "knowledge-hub", "write-token"),
-      "utf8"
-    )).trim();
-    if (!token) return;
+    const dir = path.join(home, ".config", "knowledge-hub");
+    const filePath = path.join(dir, "write-token.json");
+    const legacy = path.join(dir, "write-token");
+    let data = await readTokenFile(filePath) ?? await readTokenFile(legacy);
+    if (!data?.token) return;
+    let token = data.token;
+    if (expiresSoon(data.expires_at)) {
+      try {
+        token = await refreshTokenFile(filePath, token);
+      } catch {
+      }
+    }
     let tenantSlug;
     try {
+      const fs = await import("node:fs/promises");
       const memoryDir = path.join(home, ".claude", "memory");
       const entries = await fs.readdir(memoryDir);
       tenantSlug = entries.find((e) => !e.startsWith("."));

@@ -25,18 +25,74 @@ from datetime import datetime, timezone
 
 
 HOME = Path.home()
-TOKEN_PATH = HOME / ".config" / "knowledge-hub" / "canon-token"
+CONFIG_DIR = HOME / ".config" / "knowledge-hub"
+TOKEN_JSON = CONFIG_DIR / "canon-token.json"
+TOKEN_LEGACY = CONFIG_DIR / "canon-token"   # plain-text fallback
 MEMORY_ROOT = HOME / ".claude" / "memory"
 API_BASE = os.environ.get("KH_API_BASE_URL", "https://api.knowledgehub.com").rstrip("/")
+REFRESH_DAYS = 30  # refresh when fewer than this many days remain
+
+
+def read_token_file() -> tuple[str | None, str | None]:
+    """Return (raw_token, expires_at). Handles both JSON and legacy plain-text."""
+    env_token = os.environ.get("KH_CANON_TOKEN")
+    if env_token:
+        return env_token.strip(), None
+    if TOKEN_JSON.exists():
+        try:
+            data = json.loads(TOKEN_JSON.read_text())
+            return data.get("token"), data.get("expires_at")
+        except Exception:
+            pass
+    if TOKEN_LEGACY.exists():
+        return TOKEN_LEGACY.read_text().strip(), None
+    return None, None
+
+
+def save_token_file(token: str, expires_at: str) -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    TOKEN_JSON.write_text(json.dumps({"token": token, "expires_at": expires_at}))
+    TOKEN_JSON.chmod(0o600)
+
+
+def token_expires_soon(expires_at: str | None) -> bool:
+    if not expires_at:
+        return True
+    try:
+        expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        remaining = (expiry - datetime.now(timezone.utc)).days
+        return remaining < REFRESH_DAYS
+    except Exception:
+        return True
+
+
+def refresh_token(current_token: str) -> tuple[str, str] | None:
+    """Call POST /api/tokens/refresh. Returns (new_token, expires_at) or None on error."""
+    try:
+        req = urllib.request.Request(
+            f"{API_BASE}/api/tokens/refresh",
+            data=b"{}",
+            headers={"Authorization": f"Bearer {current_token}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data["token"], data["expires_at"]
+    except Exception:
+        return None
 
 
 def read_token() -> str | None:
-    env_token = os.environ.get("KH_CANON_TOKEN")
-    if env_token:
-        return env_token.strip()
-    if TOKEN_PATH.exists():
-        return TOKEN_PATH.read_text().strip()
-    return None
+    """Read token, refreshing from the API if expiry is within REFRESH_DAYS."""
+    token, expires_at = read_token_file()
+    if not token:
+        return None
+    if token_expires_soon(expires_at):
+        refreshed = refresh_token(token)
+        if refreshed:
+            token, expires_at = refreshed
+            save_token_file(token, expires_at)
+    return token
 
 
 def fetch_canon(token: str, since: str | None) -> dict:
