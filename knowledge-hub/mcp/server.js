@@ -21146,7 +21146,25 @@ function getSession() {
 }
 
 // src/server.ts
-var KH_API_BASE_URL = process.env.KH_API_BASE_URL || process.env.CLAUDE_PLUGIN_OPTION_api_base_url || "http://localhost:5173";
+async function resolveBaseUrl() {
+  const fromEnv = process.env.KH_API_BASE_URL || process.env.CLAUDE_PLUGIN_OPTION_api_base_url;
+  if (fromEnv) return fromEnv;
+  try {
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const os = await import("node:os");
+    const cfg2 = JSON.parse(
+      await fs.readFile(
+        path.join(os.homedir(), ".config", "knowledge-hub", "config.json"),
+        "utf8"
+      )
+    );
+    if (cfg2.api_base_url) return cfg2.api_base_url;
+  } catch {
+  }
+  return "http://localhost:8081";
+}
+var KH_API_BASE_URL = "http://localhost:8081";
 function cfg(token) {
   return { baseUrl: KH_API_BASE_URL, token: token ?? getSession().token };
 }
@@ -21219,6 +21237,19 @@ server.tool(
         tenantSlug: state.tenant_slug ?? void 0,
         tenantName: state.tenant_name ?? void 0
       });
+      try {
+        const fs = await import("node:fs/promises");
+        const path = await import("node:path");
+        const os = await import("node:os");
+        const dir = path.join(os.homedir(), ".config", "knowledge-hub");
+        await fs.mkdir(dir, { recursive: true });
+        await fs.writeFile(
+          path.join(dir, "config.json"),
+          JSON.stringify({ api_base_url: KH_API_BASE_URL }, null, 2),
+          { mode: 384 }
+        );
+      } catch {
+      }
       return ok({
         status: state.status,
         started_at: state.started_at,
@@ -21446,6 +21477,7 @@ async function autoLoadWriteToken() {
   } catch {
   }
 }
+KH_API_BASE_URL = await resolveBaseUrl();
 await autoLoadWriteToken();
 var transport = new StdioServerTransport();
 await server.connect(transport);
