@@ -21123,6 +21123,15 @@ async function request(cfg2, method, path, body) {
   const text = await res.text();
   const parsed = text ? safeJson(text) : null;
   if (!res.ok) throw new ApiError(res.status, parsed ?? text);
+  if (parsed === null) {
+    const preview = text.slice(0, 80).replace(/\s+/g, " ").trim();
+    throw new ApiError(502, {
+      error: "non_json_response",
+      content_type: res.headers.get("content-type"),
+      preview: preview ? `${preview}${text.length > 80 ? "\u2026" : ""}` : "(empty)",
+      hint: `${url} returned 200 but the body isn't JSON \u2014 the SaaS API likely isn't routing this path. Restart the dev server, or confirm the route file exists.`
+    });
+  }
   return parsed;
 }
 function safeJson(s) {
@@ -21146,9 +21155,23 @@ function getSession() {
 }
 
 // src/server.ts
+function isValidHttpUrl(s) {
+  if (!s) return false;
+  try {
+    const u = new URL(s);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
 async function resolveBaseUrl() {
-  const fromEnv = process.env.KH_API_BASE_URL || process.env.CLAUDE_PLUGIN_OPTION_api_base_url;
-  if (fromEnv) return fromEnv;
+  const candidates = [
+    process.env.KH_API_BASE_URL,
+    process.env.CLAUDE_PLUGIN_OPTION_api_base_url
+  ];
+  for (const c of candidates) {
+    if (isValidHttpUrl(c)) return c;
+  }
   try {
     const fs = await import("node:fs/promises");
     const path = await import("node:path");
@@ -21159,7 +21182,7 @@ async function resolveBaseUrl() {
         "utf8"
       )
     );
-    if (cfg2.api_base_url) return cfg2.api_base_url;
+    if (isValidHttpUrl(cfg2.api_base_url)) return cfg2.api_base_url;
   } catch {
   }
   return "http://localhost:8081";
@@ -21216,6 +21239,15 @@ function explain(e) {
     if (e.status === 401) return "Token invalid, expired, or revoked. Ask the admin to regenerate at /onboarding in the SaaS.";
     if (e.status === 403) return `Forbidden: ${e.message}`;
     if (e.status === 422) return `Validation failed: ${JSON.stringify(e.body)}`;
+    if (e.status === 502) {
+      const body = e.body;
+      const parts = [
+        body?.hint ?? "SaaS API returned a non-JSON response.",
+        body?.content_type ? `content-type: ${body.content_type}` : null,
+        body?.preview ? `body preview: ${body.preview}` : null
+      ].filter(Boolean);
+      return parts.join("\n");
+    }
     return `API error (${e.status}): ${e.message}`;
   }
   return e instanceof Error ? e.message : "Unknown error";
@@ -21265,20 +21297,13 @@ server.tool(
 );
 server.tool(
   "get_template",
-  "Fetch a document template (markdown skeleton + structured field schema) for a given doc type.",
+  "Fetch a document template (markdown skeleton + structured field schema) by template slug. Use only when you want to constrain a doc to a known structure. Most new docs are free-form and skip templates entirely.",
   {
-    doc_type: external_exports.enum(["company", "team", "process", "project", "note"]).describe("Which template to retrieve. 'note' returns a minimal free-form skeleton.")
+    template_slug: external_exports.string().min(1).max(60).describe("Template identifier, e.g. 'company', 'team', 'process', 'project'. Returns 404 if no such template exists.")
   },
-  async ({ doc_type }) => {
-    if (doc_type === "note") {
-      return ok({
-        doc_type: "note",
-        skeleton: "# {{title}}\n\n{{content}}\n",
-        note: "Notes are free-form \u2014 no required sections or line cap."
-      });
-    }
+  async ({ template_slug }) => {
     try {
-      const tmpl = await request(cfg(), "GET", `/api/templates/${doc_type}`);
+      const tmpl = await request(cfg(), "GET", `/api/templates/${encodeURIComponent(template_slug)}`);
       return ok(tmpl);
     } catch (e) {
       return fail("Failed to fetch template.", explain(e));
@@ -21311,12 +21336,14 @@ function slugify(s) {
 }
 server.tool(
   "submit_draft_document",
-  "Create or update a company document. Changes are applied immediately and the local cache is refreshed. doc_type:'note' is free-form (no template required) \u2014 use it for projects, roadmaps, RFCs, or any ad-hoc doc. Other types (company/team/process/project) are linted against their template.",
+  "Create or update a wiki document. doc_type is a free-form category tag (e.g. 'thesis', 'capability', 'phase', 'brand'). scope groups docs by the thing being mapped (e.g. 'canon', 'product-launch-q3', 'personal-life'). template_slug is optional \u2014 provide it only when you want the doc linted against a stored template; omit for free-form docs.",
   {
-    doc_type: external_exports.enum(["company", "team", "process", "project", "note"]).describe("'note' is free-form and skips template lint. Use it for any ad-hoc document."),
+    doc_type: external_exports.string().min(1).max(60).describe("Free-form category tag. Used for badges/filtering. Examples: 'thesis', 'capability', 'phase', 'problem', 'brand', 'doc'."),
+    scope: external_exports.string().min(1).max(60).optional().describe("Slug grouping docs by the thing being mapped. One scope = one set of related docs. Examples: 'canon', 'product-launch-q3'."),
+    template_slug: external_exports.string().min(1).max(60).optional().describe("Optional. If supplied, the doc is linted against this template (line cap + required sections). Omit for free-form docs."),
     title: external_exports.string().min(1).max(200),
     content_markdown: external_exports.string().min(1),
-    team_slug: external_exports.string().optional().describe("Scopes the doc to a team. Required for team/process/project; optional for note."),
+    team_slug: external_exports.string().optional().describe("Scopes the doc to a team within the tenant. Optional."),
     owner_emails: external_exports.array(external_exports.string().email()).optional(),
     source_metadata: external_exports.record(external_exports.unknown()).optional()
   },
@@ -21339,22 +21366,13 @@ server.tool(
             const home = os.homedir();
             const base = path.join(home, ".claude", "memory", tenantSlug);
             const titleSlug = slugify(input.title);
-            let filePath;
-            if (input.doc_type === "company") {
-              filePath = path.join(base, "company.md");
-            } else {
-              const team = slugify(input.team_slug ?? "general");
-              if (input.doc_type === "team") {
-                filePath = path.join(base, "teams", team, "team.md");
-              } else if (input.doc_type === "process") {
-                filePath = path.join(base, "teams", team, "processes", `${titleSlug}.md`);
-              } else if (input.doc_type === "project") {
-                filePath = path.join(base, "teams", team, "projects", `${titleSlug}.md`);
-              } else {
-                const notesDir = input.team_slug ? path.join(base, "teams", team, "notes") : path.join(base, "notes");
-                filePath = path.join(notesDir, `${titleSlug}.md`);
-              }
-            }
+            const scopeSlug = input.scope ? slugify(input.scope) : null;
+            const typeSlug = slugify(input.doc_type);
+            const segments = [base];
+            if (scopeSlug) segments.push(scopeSlug);
+            if (typeSlug) segments.push(typeSlug);
+            segments.push(`${titleSlug}.md`);
+            const filePath = path.join(...segments);
             await fs.mkdir(path.dirname(filePath), { recursive: true });
             await fs.writeFile(filePath, result.content_markdown, "utf8");
           }
@@ -21364,7 +21382,7 @@ server.tool(
       return ok(result);
     } catch (e) {
       if (e instanceof ApiError && e.status === 422) {
-        return fail("Document failed validation.", explain(e) + "\nAsk the admin to shorten or restructure, then resubmit.");
+        return fail("Document failed template lint.", explain(e) + "\nEither restructure to match the template, or drop template_slug for a free-form doc.");
       }
       return fail("Submit failed.", explain(e));
     }

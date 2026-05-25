@@ -29,8 +29,27 @@ CONFIG_DIR = HOME / ".config" / "knowledge-hub"
 TOKEN_JSON = CONFIG_DIR / "canon-token.json"
 TOKEN_LEGACY = CONFIG_DIR / "canon-token"   # plain-text fallback
 MEMORY_ROOT = HOME / ".claude" / "memory"
-API_BASE = os.environ.get("KH_API_BASE_URL", "https://api.knowledgehub.com").rstrip("/")
 REFRESH_DAYS = 30  # refresh when fewer than this many days remain
+
+
+def _resolve_api_base() -> str:
+    # 1. Explicit env vars (set by hook wrapper or user)
+    env = os.environ.get("KH_API_BASE_URL") or os.environ.get("CLAUDE_PLUGIN_OPTION_api_base_url")
+    if env:
+        return env.rstrip("/")
+    # 2. config.json written by verify_token on first run (mirrors MCP server logic)
+    config_file = CONFIG_DIR / "config.json"
+    if config_file.exists():
+        try:
+            data = json.loads(config_file.read_text())
+            if data.get("api_base_url"):
+                return data["api_base_url"].rstrip("/")
+        except Exception:
+            pass
+    return "https://api.knowledgehub.com"
+
+
+API_BASE = _resolve_api_base()
 
 
 def read_token_file() -> tuple[str | None, str | None]:
@@ -112,22 +131,29 @@ def slugify(s: str) -> str:
 
 
 def doc_path(tenant_slug: str, d: dict) -> Path:
+    """
+    Local cache layout mirrors the wiki:
+        <tenant>/<scope>/<doc_type>/<title-slug>.md
+
+    When scope is missing the doc lands directly under the tenant; when
+    doc_type is missing it's treated as a flat "doc". This must match the
+    layout used by submit_draft_document in the MCP server so cached
+    writes and pulls converge on the same path.
+    """
     base = MEMORY_ROOT / tenant_slug
-    dt = d.get("doc_type")
     title_slug = slugify(d.get("slug") or d.get("title") or "doc")
-    if dt == "company":
-        return base / "company.md"
-    team = slugify(d.get("team") or "general")
-    if dt == "team":
-        return base / "teams" / team / "team.md"
-    if dt == "process":
-        return base / "teams" / team / "processes" / f"{title_slug}.md"
-    if dt == "project":
-        return base / "teams" / team / "projects" / f"{title_slug}.md"
-    if dt == "note":
-        notes_dir = base / "teams" / team / "notes" if d.get("team") else base / "notes"
-        return notes_dir / f"{title_slug}.md"
-    return base / f"{title_slug}.md"
+    parts: list[Path] = [base]
+    scope = d.get("scope")
+    if scope:
+        parts.append(Path(slugify(scope)))
+    dt = d.get("doc_type")
+    if dt:
+        parts.append(Path(slugify(dt)))
+    parts.append(Path(f"{title_slug}.md"))
+    result = parts[0]
+    for p in parts[1:]:
+        result = result / p
+    return result
 
 
 def _instructions_hash(instructions: str) -> str:
@@ -207,9 +233,12 @@ def rewrite_index(tenant_slug: str) -> None:
         "Index of locally-synced canon. Loaded at session start.",
         "",
     ]
-    company = base / "company.md"
-    if company.exists():
-        lines += ["## Company", "", f"- [company.md](./company.md)", ""]
+    company_docs = sorted(p for p in base.glob("*.md") if p.name != "memory.md")
+    if company_docs:
+        lines += ["## Company", ""]
+        for p in company_docs:
+            lines.append(f"- [{p.name}](./{p.name})")
+        lines.append("")
 
     teams_dir = base / "teams"
     if teams_dir.exists():
@@ -227,7 +256,18 @@ def rewrite_index(tenant_slug: str) -> None:
             if projs.exists():
                 for p in sorted(projs.glob("*.md")):
                     lines.append(f"- [{p.name}](./teams/{team_dir.name}/projects/{p.name})")
+            notes = team_dir / "notes"
+            if notes.exists():
+                for p in sorted(notes.glob("*.md")):
+                    lines.append(f"- [{p.name}](./teams/{team_dir.name}/notes/{p.name})")
             lines.append("")
+
+    notes_root = base / "notes"
+    if notes_root.exists():
+        lines += ["## Notes", ""]
+        for p in sorted(notes_root.glob("*.md")):
+            lines.append(f"- [{p.name}](./notes/{p.name})")
+        lines.append("")
     (base / "memory.md").write_text("\n".join(lines).rstrip() + "\n")
 
 
