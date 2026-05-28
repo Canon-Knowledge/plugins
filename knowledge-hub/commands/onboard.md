@@ -183,9 +183,19 @@ When the user asks you to modify a doc that already exists — "add X to
 the memory layers doc", "rewrite the why-now section", "fix the typo
 in financials" — you MUST update the existing doc, not create a new one.
 
-1. Find the `document_id` from the local cache index at
-   `~/.claude/memory/<tenant>/memory.md`. Each entry links to
-   `/app/docs/<document_id>` — extract the UUID.
+1. **Pick the right `document_id`.** The local cache index at
+   `~/.claude/memory/<tenant>/memory.md` is the ONLY authoritative
+   source for the title → document_id mapping. Each entry there
+   already maps to a doc whose markdown is on disk; open that file's
+   companion `*.md` to confirm you're looking at the right one.
+
+   **Anti-pattern (this caused a data corruption incident):** Do NOT
+   extract a UUID from a `/app/docs/<id>` link inside a doc's body
+   (e.g. the "See also" section). Those links point at *other* docs,
+   not the one you're reading. Always source the `document_id` from
+   the index file or by listing the local cache directory and
+   matching the file you're about to edit to its index entry.
+
 2. Read the current content from `~/.claude/memory/<tenant>/<scope>/<doc_type>/<slug>.md`.
 3. Compose the new full content (the API takes the complete document,
    not a diff). Preserve everything you didn't intend to change.
@@ -193,9 +203,19 @@ in financials" — you MUST update the existing doc, not create a new one.
    `content_markdown`, an honest `edit_message` describing the change,
    and the same `doc_type`/`scope`/`title` (or updated ones if the
    user is renaming/recategorizing).
-5. Confirm to the user that the response contained `updated: true`
+5. **Verify the response.** It now includes the canonical `doc_type`,
+   `scope`, `slug`, and `title` of the doc that was written. If those
+   don't match what you sent (a rename you intended didn't go through),
+   tell the user instead of silently moving on.
+6. Confirm to the user that the response contained `updated: true`
    and the new `version_number`. If `updated: false`, you accidentally
-   created a new doc — tell the user, and rerun with the correct ID.
+   created a new doc — apologize, archive the new one via the SaaS
+   UI, and rerun with the correct ID.
+7. **Handle 409 `slug_conflict`.** If the server rejects the edit
+   because another active doc owns the (scope, slug), stop. The
+   response includes the conflicting `existing_document_id`. Tell
+   the user, ask which doc they actually wanted you to edit, and
+   retry with that ID.
 
 ### 6. Living docs / workspace upload
 

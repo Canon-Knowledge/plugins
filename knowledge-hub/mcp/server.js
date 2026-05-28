@@ -21414,9 +21414,9 @@ server.tool(
             const os = await import("node:os");
             const home = os.homedir();
             const base = path.join(home, ".claude", "memory", tenantSlug);
-            const titleSlug = slugify(input.title);
-            const scopeSlug = input.scope ? slugify(input.scope) : null;
-            const typeSlug = slugify(input.doc_type);
+            const titleSlug = result.slug || slugify(result.title || input.title);
+            const scopeSlug = result.scope ? slugify(result.scope) : null;
+            const typeSlug = result.doc_type ? slugify(result.doc_type) : null;
             const segments = [base];
             if (scopeSlug) segments.push(scopeSlug);
             if (typeSlug) segments.push(typeSlug);
@@ -21447,6 +21447,15 @@ server.tool(
     } catch (e) {
       if (e instanceof ApiError && e.status === 422) {
         return fail("Document failed template lint.", explain(e) + "\nEither restructure to match the template, or drop template_slug for a free-form doc.");
+      }
+      if (e instanceof ApiError && e.status === 409) {
+        const body = e.body;
+        const lines = [
+          "Slug conflict: another active document already owns this (scope, slug).",
+          body?.details?.existing_document_id ? `Existing document_id: ${body.details.existing_document_id}.` : null,
+          "Stop and check the local cache index (~/.claude/memory/<tenant>/memory.md) before retrying. If you are updating an existing doc, pass that doc's document_id explicitly."
+        ].filter(Boolean);
+        return fail("Slug conflict.", lines.join("\n"));
       }
       return fail("Submit failed.", explain(e));
     }
