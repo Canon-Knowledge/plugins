@@ -21228,6 +21228,52 @@ function getSessionSafe() {
 function ok(payload) {
   return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
 }
+function summarizeArgs(args) {
+  const out = {};
+  for (const [k, v] of Object.entries(args)) {
+    if (k === "token" && typeof v === "string") {
+      out[k] = v.length > 12 ? `${v.slice(0, 6)}\u2026(${v.length})` : "(short)";
+    } else if (k === "content_markdown" && typeof v === "string") {
+      out.content_length = v.length;
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+async function logEvent(event) {
+  try {
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const os = await import("node:os");
+    const dir = path.join(os.homedir(), ".config", "knowledge-hub");
+    await fs.mkdir(dir, { recursive: true });
+    const line = JSON.stringify({ ts: (/* @__PURE__ */ new Date()).toISOString(), ...event }) + "\n";
+    await fs.appendFile(path.join(dir, "mcp.log"), line, { mode: 384 });
+  } catch {
+  }
+}
+function instrument(toolName, fn) {
+  return async (args) => {
+    void logEvent({ tool: toolName, action: "call", args: summarizeArgs(args) });
+    try {
+      const result = await fn(args);
+      void logEvent({
+        tool: toolName,
+        action: "result",
+        ok: !result?.isError
+      });
+      return result;
+    } catch (e) {
+      void logEvent({
+        tool: toolName,
+        action: "error",
+        message: e instanceof Error ? e.message : String(e)
+      });
+      throw e;
+    }
+  };
+}
 function fail(message, hint) {
   const body = hint ? `${message}
 
@@ -21336,18 +21382,20 @@ function slugify(s) {
 }
 server.tool(
   "submit_draft_document",
-  "Create or update a wiki document. doc_type is a free-form category tag (e.g. 'thesis', 'capability', 'phase', 'brand'). scope groups docs by the thing being mapped (e.g. 'canon', 'product-launch-q3', 'personal-life'). template_slug is optional \u2014 provide it only when you want the doc linted against a stored template; omit for free-form docs.",
+  "Create or update a wiki document. To UPDATE an existing doc, pass its document_id (find it in the local cache index at ~/.claude/memory/<tenant>/memory.md \u2014 every entry links to /app/docs/<id>). To CREATE a new doc, omit document_id; the server still auto-detects by (tenant, scope, slug) so you won't silently create a duplicate. doc_type is a free-form category tag (e.g. 'thesis', 'capability', 'phase', 'brand'). scope groups docs by the thing being mapped. template_slug is optional.",
   {
-    doc_type: external_exports.string().min(1).max(60).describe("Free-form category tag. Used for badges/filtering. Examples: 'thesis', 'capability', 'phase', 'problem', 'brand', 'doc'."),
-    scope: external_exports.string().min(1).max(60).optional().describe("Slug grouping docs by the thing being mapped. One scope = one set of related docs. Examples: 'canon', 'product-launch-q3'."),
-    template_slug: external_exports.string().min(1).max(60).optional().describe("Optional. If supplied, the doc is linted against this template (line cap + required sections). Omit for free-form docs."),
+    document_id: external_exports.string().uuid().optional().describe("UUID of the doc to update. Omit to create a new doc. If the (tenant, scope, slug) already matches an active doc, the server updates it even without document_id and returns updated:true."),
+    doc_type: external_exports.string().min(1).max(60).describe("Free-form category tag. Examples: 'thesis', 'capability', 'phase', 'problem', 'brand', 'doc'."),
+    scope: external_exports.string().min(1).max(60).optional().describe("Slug grouping docs by the thing being mapped. Examples: 'canon', 'product-launch-q3'."),
+    template_slug: external_exports.string().min(1).max(60).optional().describe("Optional. If supplied, the doc is linted against this template. Omit for free-form docs."),
     title: external_exports.string().min(1).max(200),
     content_markdown: external_exports.string().min(1),
     team_slug: external_exports.string().optional().describe("Scopes the doc to a team within the tenant. Optional."),
     owner_emails: external_exports.array(external_exports.string().email()).optional(),
-    source_metadata: external_exports.record(external_exports.unknown()).optional()
+    source_metadata: external_exports.record(external_exports.unknown()).optional(),
+    edit_message: external_exports.string().max(400).optional().describe("Short human-readable summary of what changed in this version. Surfaced in activity_log and the review UI.")
   },
-  async (input) => {
+  instrument("submit_draft_document", async (input) => {
     try {
       const result = await request(
         cfg(),
@@ -21356,6 +21404,7 @@ server.tool(
         { ...input, auto_approve: true }
       );
       if (result.auto_approved && result.content_markdown) {
+        let cachePath = null;
         try {
           const session = getSession();
           const tenantSlug = session.tenantSlug;
@@ -21372,11 +21421,26 @@ server.tool(
             if (scopeSlug) segments.push(scopeSlug);
             if (typeSlug) segments.push(typeSlug);
             segments.push(`${titleSlug}.md`);
-            const filePath = path.join(...segments);
-            await fs.mkdir(path.dirname(filePath), { recursive: true });
-            await fs.writeFile(filePath, result.content_markdown, "utf8");
+            cachePath = path.join(...segments);
+            await fs.mkdir(path.dirname(cachePath), { recursive: true });
+            await fs.writeFile(cachePath, result.content_markdown, "utf8");
+            void logEvent({
+              tool: "submit_draft_document",
+              action: "cache_write",
+              path: cachePath,
+              bytes: result.content_markdown.length,
+              document_id: result.document_id,
+              version_number: result.version_number,
+              updated: result.updated
+            });
           }
-        } catch {
+        } catch (e) {
+          void logEvent({
+            tool: "submit_draft_document",
+            action: "cache_write_failed",
+            path: cachePath,
+            message: e instanceof Error ? e.message : String(e)
+          });
         }
       }
       return ok(result);
@@ -21386,7 +21450,7 @@ server.tool(
       }
       return fail("Submit failed.", explain(e));
     }
-  }
+  })
 );
 server.tool(
   "create_team",

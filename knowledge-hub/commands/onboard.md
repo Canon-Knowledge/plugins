@@ -33,11 +33,20 @@ All from the `knowledge-hub-onboarding` MCP server:
   free-form and skip templates.
 - `list_drive_folders({ parent_id?, depth? })` — folder + file names in
   the workspace Drive. Returns `connected: false` when no Drive linked.
-- `submit_draft_document({ doc_type, scope?, template_slug?, title,
-  content_markdown, team_slug?, owner_emails?, source_metadata? })` —
-  files a doc. `doc_type` is free-form text. `scope` groups docs by
-  what's being mapped. `template_slug` is optional; supply it only when
-  you want the server to lint against a stored template.
+- `submit_draft_document({ document_id?, doc_type, scope?,
+  template_slug?, title, content_markdown, team_slug?, owner_emails?,
+  source_metadata?, edit_message? })` — creates OR updates a doc.
+  - **Updating an existing doc**: pass its `document_id`. Find it in
+    the local cache index at `~/.claude/memory/<tenant>/memory.md` —
+    every entry links to `/app/docs/<document_id>`. Always do this
+    when the user asks you to "edit", "change", "add to", or
+    otherwise modify a doc that already exists.
+  - **Creating a new doc**: omit `document_id`. The server still
+    auto-detects an existing match by (tenant, scope, slug) and
+    updates it in that case (returns `updated: true`) — so you can't
+    silently duplicate.
+  - `edit_message` summarizes what changed in this version; it's
+    surfaced in activity_log and the review UI. Use it.
 - `create_team({ name, description?, lead_email? })` — idempotent by name.
 - `emit_event(event_type, payload?)` — instrumentation.
 - `complete_onboarding()` — finalize, mint read/write tokens.
@@ -167,6 +176,26 @@ For each file in the agreed tree:
    you supplied `template_slug`), either fix the doc or drop the
    template_slug and resubmit.
 6. `emit_event("doc_documented", { document_id, scope, doc_type, title })`.
+
+### 5b. Edit an existing doc (post-onboarding)
+
+When the user asks you to modify a doc that already exists — "add X to
+the memory layers doc", "rewrite the why-now section", "fix the typo
+in financials" — you MUST update the existing doc, not create a new one.
+
+1. Find the `document_id` from the local cache index at
+   `~/.claude/memory/<tenant>/memory.md`. Each entry links to
+   `/app/docs/<document_id>` — extract the UUID.
+2. Read the current content from `~/.claude/memory/<tenant>/<scope>/<doc_type>/<slug>.md`.
+3. Compose the new full content (the API takes the complete document,
+   not a diff). Preserve everything you didn't intend to change.
+4. Call `submit_draft_document` with the `document_id`, the new
+   `content_markdown`, an honest `edit_message` describing the change,
+   and the same `doc_type`/`scope`/`title` (or updated ones if the
+   user is renaming/recategorizing).
+5. Confirm to the user that the response contained `updated: true`
+   and the new `version_number`. If `updated: false`, you accidentally
+   created a new doc — tell the user, and rerun with the correct ID.
 
 ### 6. Living docs / workspace upload
 
