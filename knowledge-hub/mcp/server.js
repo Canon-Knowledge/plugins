@@ -21206,7 +21206,7 @@ async function readTokenFile(filePath) {
   }
 }
 function expiresSoon(expiresAt) {
-  if (!expiresAt) return true;
+  if (!expiresAt) return false;
   return new Date(expiresAt).getTime() - Date.now() < 30 * 24 * 60 * 60 * 1e3;
 }
 async function refreshTokenFile(filePath, currentToken) {
