@@ -224,22 +224,54 @@ def upsert_claude_md(tenant_slug: str, hub_url: str, claude_instructions: str = 
 
 
 def rewrite_index(tenant_slug: str) -> None:
+    """
+    Walk the on-disk layout (<tenant>/<scope>/<doc_type>/<title>.md plus any
+    legacy flat layout files) and emit memory.md as the entry-point index.
+
+    Grouped by scope, then by doc_type. Files at the tenant root (no scope)
+    end up under "## Workspace".
+    """
     base = MEMORY_ROOT / tenant_slug
     if not base.exists():
         return
+
     lines = [
         f"# Knowledge Hub: {tenant_slug}",
         "",
         "Index of locally-synced canon. Loaded at session start.",
         "",
     ]
-    company_docs = sorted(p for p in base.glob("*.md") if p.name != "memory.md")
-    if company_docs:
-        lines += ["## Company", ""]
-        for p in company_docs:
-            lines.append(f"- [{p.name}](./{p.name})")
+
+    # Tenant-root .md files (legacy + scope-less docs).
+    root_docs = sorted(p for p in base.glob("*.md") if p.name != "memory.md")
+    if root_docs:
+        lines += ["## Workspace", ""]
+        for p in root_docs:
+            lines.append(f"- [{p.stem}](./{p.name})")
         lines.append("")
 
+    # New layout: <scope>/<doc_type>/<title>.md
+    for scope_dir in sorted(p for p in base.iterdir() if p.is_dir() and not p.name.startswith(".")):
+        # The legacy `teams/` and `notes/` roots used the old "team_slug"
+        # layout (teams/<team>/processes/*.md). They're handled below.
+        if scope_dir.name in ("teams", "notes"):
+            continue
+        nested = sorted(scope_dir.rglob("*.md"))
+        if not nested:
+            continue
+        lines += [f"## {scope_dir.name}", ""]
+        # Group by immediate parent directory (= doc_type).
+        last_group = None
+        for p in nested:
+            group = p.parent.name if p.parent != scope_dir else "(uncategorized)"
+            if group != last_group:
+                lines.append(f"### {group}")
+                last_group = group
+            rel = p.relative_to(base).as_posix()
+            lines.append(f"- [{p.stem}](./{rel})")
+        lines.append("")
+
+    # Legacy team layout (kept for backward compatibility).
     teams_dir = base / "teams"
     if teams_dir.exists():
         lines += ["## Teams", ""]
@@ -248,27 +280,50 @@ def rewrite_index(tenant_slug: str) -> None:
             team_doc = team_dir / "team.md"
             if team_doc.exists():
                 lines.append(f"- [team.md](./teams/{team_dir.name}/team.md)")
-            procs = team_dir / "processes"
-            if procs.exists():
-                for p in sorted(procs.glob("*.md")):
-                    lines.append(f"- [{p.name}](./teams/{team_dir.name}/processes/{p.name})")
-            projs = team_dir / "projects"
-            if projs.exists():
-                for p in sorted(projs.glob("*.md")):
-                    lines.append(f"- [{p.name}](./teams/{team_dir.name}/projects/{p.name})")
-            notes = team_dir / "notes"
-            if notes.exists():
-                for p in sorted(notes.glob("*.md")):
-                    lines.append(f"- [{p.name}](./teams/{team_dir.name}/notes/{p.name})")
+            for sub in ("processes", "projects", "notes"):
+                sub_dir = team_dir / sub
+                if sub_dir.exists():
+                    for p in sorted(sub_dir.glob("*.md")):
+                        lines.append(f"- [{p.stem}](./teams/{team_dir.name}/{sub}/{p.name})")
             lines.append("")
 
     notes_root = base / "notes"
     if notes_root.exists():
         lines += ["## Notes", ""]
         for p in sorted(notes_root.glob("*.md")):
-            lines.append(f"- [{p.name}](./notes/{p.name})")
+            lines.append(f"- [{p.stem}](./notes/{p.name})")
         lines.append("")
+
     (base / "memory.md").write_text("\n".join(lines).rstrip() + "\n")
+
+
+def prune_stale(tenant_slug: str, kept_paths: set[Path]) -> int:
+    """
+    Walk the tenant directory and delete any .md file not in kept_paths.
+    Removes empty directories left behind. Returns count of files pruned.
+    Preserves memory.md and .sync_state.json.
+    """
+    base = MEMORY_ROOT / tenant_slug
+    if not base.exists():
+        return 0
+    pruned = 0
+    for p in base.rglob("*.md"):
+        if p.name == "memory.md":
+            continue
+        if p in kept_paths:
+            continue
+        try:
+            p.unlink()
+            pruned += 1
+        except Exception:
+            continue
+    # Remove empty directories left behind by the prune (post-order walk).
+    for d in sorted((p for p in base.rglob("*") if p.is_dir()), key=lambda x: -len(x.parts)):
+        try:
+            d.rmdir()
+        except OSError:
+            pass  # not empty — leave it
+    return pruned
 
 
 def main() -> int:
@@ -278,20 +333,10 @@ def main() -> int:
         return 0
 
     try:
-        # Read existing sync state, if any. We assume a single tenant
-        # per machine for V1; multi-tenant sync is a V2 concern.
-        state_files = list(MEMORY_ROOT.glob("*/.sync_state.json")) if MEMORY_ROOT.exists() else []
-        since = None
-        for sf in state_files:
-            try:
-                data = json.loads(sf.read_text())
-                cur = data.get("last_synced_at")
-                if cur and (since is None or cur < since):
-                    since = cur
-            except Exception:
-                continue
-
-        canon = fetch_canon(token, since)
+        # Full sync: always fetch every active doc. Cheap at MVP scale and
+        # the only reliable way to detect deletions (the API has no
+        # tombstone feed). The `since` parameter is intentionally omitted.
+        canon = fetch_canon(token, None)
     except urllib.error.HTTPError as e:
         # 401 → token revoked. Stop silently; the next onboarding run
         # will mint a new one.
@@ -301,18 +346,23 @@ def main() -> int:
 
     tenant_slug = slugify(canon.get("tenant_slug") or "workspace")
     docs = canon.get("docs", [])
-    if not docs:
-        return 0
 
     written = 0
+    kept_paths: set[Path] = set()
     for d in docs:
         try:
             p = doc_path(tenant_slug, d)
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(d.get("content_markdown", ""))
+            kept_paths.add(p)
             written += 1
         except Exception:
             continue
+
+    # Delete any .md files left over from a previous sync (docs deleted in
+    # the Hub, doc_type/scope renames, etc.). Without this the local cache
+    # accumulates ghosts and Claude reads stale info.
+    prune_stale(tenant_slug, kept_paths)
 
     base = MEMORY_ROOT / tenant_slug
     base.mkdir(parents=True, exist_ok=True)
