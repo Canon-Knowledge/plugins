@@ -21500,6 +21500,25 @@ server.tool(
   }
 );
 server.tool(
+  "register_asset",
+  "Register a file the user owns and may reference but did not write here (PDFs, spreadsheets, decks, planning docs). Returns an asset_id you can immediately link to as `/app/assets/<id>` inside wiki docs. The user attaches the actual file bytes via the /app/files UI. Set visibility='internal' for sensitive files (contracts, confidential numbers) \u2014 the agent will use them for reasoning but will NOT include the link in user-visible responses. Default 'shareable' lets you link freely.",
+  {
+    scope: external_exports.string().min(1).max(60).optional().describe("Same scope identifier you use on submit_draft_document. Groups related assets with their wiki docs."),
+    title: external_exports.string().min(1).max(200).describe("Human-readable name. Surfaces in the /app/files listing and as the link text."),
+    filename: external_exports.string().min(1).max(200).describe("Original filename including extension. Drives mime detection on upload."),
+    description: external_exports.string().max(2e3).optional().describe("One-paragraph summary of what the file contains and when to consult it."),
+    visibility: external_exports.enum(["internal", "shareable"]).optional().describe("'shareable' (default): you may reference /app/assets/<id> in user responses. 'internal': use for reasoning only; do NOT include the link in user-facing markdown.")
+  },
+  instrument("register_asset", async (input) => {
+    try {
+      const result = await request(cfg(), "POST", "/api/assets/register", input);
+      return ok(result);
+    } catch (e) {
+      return fail("Register asset failed.", explain(e));
+    }
+  })
+);
+server.tool(
   "complete_onboarding",
   "Finalize the interview. Revokes the onboarding token and returns a long-lived read_canon token for the sync hook.",
   {},

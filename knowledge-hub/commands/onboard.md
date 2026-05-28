@@ -48,6 +48,11 @@ All from the `knowledge-hub-onboarding` MCP server:
   - `edit_message` summarizes what changed in this version; it's
     surfaced in activity_log and the review UI. Use it.
 - `create_team({ name, description?, lead_email? })` — idempotent by name.
+- `register_asset({ scope?, title, filename, description?, visibility? })`
+  — declare a file the user owns but did not author here (PDFs,
+  spreadsheets, decks, planning docs). Returns an `asset_id` you can
+  link to as `/app/assets/<id>` in wiki docs. Always prefer this over
+  inventing a markdown link to a file path. See section 6.
 - `emit_event(event_type, payload?)` — instrumentation.
 - `complete_onboarding()` — finalize, mint read/write tokens.
 
@@ -217,15 +222,60 @@ in financials" — you MUST update the existing doc, not create a new one.
    the user, ask which doc they actually wanted you to edit, and
    retry with that ID.
 
-### 6. Living docs / workspace upload
+### 6. Assets — files the user owns but did not author here
 
-For each source document the user provided during extraction mode:
+Use `register_asset` whenever you reference a file that exists in the
+user's reality (a signed contract, an internal deck, a financial model,
+a planning PDF, a brand kit) — anything you wouldn't be authoring as
+a wiki doc.
 
-1. Tell the user the file needs to be uploaded to the workspace Drive
-   (V1: instruct them to drop it in the `<scope>/` folder of the
-   Knowledge Hub workspace; future versions will accept the upload via
-   the MCP).
-2. Create a wiki page documenting the source — see "Living docs" rule
+**Why not just link to it from markdown?** Because inventing
+`/app/docs/whatever-slug` produces broken links. Real files live at
+`/app/assets/<id>` once registered.
+
+**Visibility model — read carefully:**
+
+- `shareable` (default): you may link `/app/assets/<id>` from wiki
+  docs and from user-facing responses freely.
+- `internal`: the file exists, you may reason from it, but you MUST
+  NOT include the `/app/assets/<id>` link in markdown the user reads
+  (wiki body, chat replies). Reference it only by title in prose,
+  e.g. "per the internal pricing sheet…", without a clickable link.
+  Pick this when the user marks the file as sensitive (contracts,
+  confidential numbers, partner agreements, internal-only strategy).
+  When in doubt, ASK the user before registering.
+
+**Flow:**
+
+1. The user mentions a file (in chat, in a list of attachments, etc).
+2. Ask whether it's `shareable` or `internal` if not obvious from
+   context.
+3. Call `register_asset({ scope, title, filename, description, visibility })`.
+   Use the same scope as the surrounding wiki docs. `title` is a
+   human-readable label; `filename` is the original name with
+   extension. `description` is one paragraph about what's inside and
+   when to consult it.
+4. The response includes `asset_id`, `visibility`, and `link`. `link`
+   is the path to put in markdown (e.g. `/app/assets/abc-…`).
+   - If `visibility === "shareable"`: use `link` freely in wiki docs
+     and chat.
+   - If `visibility === "internal"`: `link` will be `null` —
+     reference the asset by title in prose; do NOT compose a
+     `/app/assets/...` URL yourself.
+5. Tell the user that `/app/files` shows their uploads and that the
+   asset currently shows "pending upload" until they drop the file
+   there. The link goes live the moment the upload completes.
+
+### 6b. Wiki page for living refs (when worth it)
+
+For source documents that warrant a dedicated wiki page (because they
+shape strategy, not just hold data), create a short wiki doc with
+`doc_type: "living"` containing:
+
+- 📎 The asset link (only if shareable) or just the asset title (if internal).
+- One-line purpose.
+- "When to read" — what questions warrant opening the source.
+- A dated snapshot tagged "do not use as data — open the source".
    in section 4.
 3. Use `doc_type: "living"` so an agent can filter living refs.
 
