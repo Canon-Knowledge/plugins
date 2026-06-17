@@ -124,6 +124,22 @@ def fetch_canon(token: str, since: str | None) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
+def fetch_spaces(token: str) -> dict[str, dict]:
+    """
+    Map of scope-slug -> {name, description} for the tenant's Spaces.
+    Best-effort: returns {} on any error (older SaaS without /api/spaces).
+    """
+    try:
+        req = urllib.request.Request(
+            f"{API_BASE}/api/spaces", headers={"Authorization": f"Bearer {token}"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return {s["slug"]: s for s in data.get("spaces", []) if s.get("slug")}
+    except Exception:
+        return {}
+
+
 def slugify(s: str) -> str:
     import re
     s = re.sub(r"[^a-z0-9]+", "-", (s or "doc").lower()).strip("-")
@@ -184,6 +200,10 @@ def upsert_claude_md(tenant_slug: str, hub_url: str, claude_instructions: str = 
     instructions = claude_instructions.strip() if claude_instructions else (
         f"The files above are a read-only local cache synced from the Knowledge Hub.\n"
         f"To update a doc use the submit_draft_document MCP tool.\n"
+        f"Every doc must start with YAML front matter: purpose, read_when, read_full, depends_on, and code.\n"
+        f"The adaptive conversational agent router uses purpose/read_when/read_full to choose context.\n"
+        f"Use read_full: true rarely, only for identity, tone, and guardrails.\n"
+        f"Create runtime tools for live data or actions outside docs; store secrets only as tool credentials.\n"
         f"Never edit files under ~/.claude/memory/ directly — the next sync overwrites them."
     )
     h = _instructions_hash(instructions)
@@ -223,14 +243,16 @@ def upsert_claude_md(tenant_slug: str, hub_url: str, claude_instructions: str = 
     claude_md.write_text(updated)
 
 
-def rewrite_index(tenant_slug: str) -> None:
+def rewrite_index(tenant_slug: str, space_meta: dict[str, dict] | None = None) -> None:
     """
     Walk the on-disk layout (<tenant>/<scope>/<doc_type>/<title>.md plus any
     legacy flat layout files) and emit memory.md as the entry-point index.
 
-    Grouped by scope, then by doc_type. Files at the tenant root (no scope)
-    end up under "## Workspace".
+    Grouped by Space (scope), then by doc_type. Files at the tenant root (no
+    scope) end up under "## Workspace". When `space_meta` carries a friendly
+    name/description for a scope, the section header uses it.
     """
+    space_meta = space_meta or {}
     base = MEMORY_ROOT / tenant_slug
     if not base.exists():
         return
@@ -256,10 +278,14 @@ def rewrite_index(tenant_slug: str) -> None:
         # layout (teams/<team>/processes/*.md). They're handled below.
         if scope_dir.name in ("teams", "notes"):
             continue
-        nested = sorted(scope_dir.rglob("*.md"))
+        # Exclude the per-Space manifest from the doc listing.
+        nested = sorted(p for p in scope_dir.rglob("*.md") if p.name != "_space.md")
         if not nested:
             continue
-        lines += [f"## {scope_dir.name}", ""]
+        meta = space_meta.get(scope_dir.name, {})
+        lines += [f"## {meta.get('name') or scope_dir.name}", ""]
+        if meta.get("description"):
+            lines += [meta["description"], ""]
         # Group by immediate parent directory (= doc_type).
         last_group = None
         for p in nested:
@@ -308,7 +334,7 @@ def prune_stale(tenant_slug: str, kept_paths: set[Path]) -> int:
         return 0
     pruned = 0
     for p in base.rglob("*.md"):
-        if p.name == "memory.md":
+        if p.name in ("memory.md", "_space.md"):
             continue
         if p in kept_paths:
             continue
@@ -346,9 +372,11 @@ def main() -> int:
 
     tenant_slug = slugify(canon.get("tenant_slug") or "workspace")
     docs = canon.get("docs", [])
+    space_meta = fetch_spaces(token)
 
     written = 0
     kept_paths: set[Path] = set()
+    scopes_seen: set[str] = set()
     for d in docs:
         try:
             p = doc_path(tenant_slug, d)
@@ -356,6 +384,26 @@ def main() -> int:
             p.write_text(d.get("content_markdown", ""))
             kept_paths.add(p)
             written += 1
+            if d.get("scope"):
+                scopes_seen.add(slugify(d["scope"]))
+        except Exception:
+            continue
+
+    # Write a per-Space manifest (_space.md) so the local cache is labeled
+    # with the Space's friendly name + description. Best-effort.
+    base_dir = MEMORY_ROOT / tenant_slug
+    for slug in scopes_seen:
+        meta = space_meta.get(slug, {})
+        name = meta.get("name") or slug.replace("-", " ").title()
+        manifest = base_dir / slug / "_space.md"
+        try:
+            body = f"# Space: {name}\n\n"
+            if meta.get("description"):
+                body += meta["description"].strip() + "\n\n"
+            body += f"Scope slug: `{slug}`\n"
+            manifest.parent.mkdir(parents=True, exist_ok=True)
+            manifest.write_text(body)
+            kept_paths.add(manifest)
         except Exception:
             continue
 
@@ -372,7 +420,7 @@ def main() -> int:
         "doc_count": written,
     }))
 
-    rewrite_index(tenant_slug)
+    rewrite_index(tenant_slug, space_meta)
     upsert_claude_md(tenant_slug, API_BASE, canon.get("claude_instructions", ""))
     return 0
 

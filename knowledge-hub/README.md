@@ -8,7 +8,9 @@
 
 Adds the `/onboard` slash command to Claude Code. The command conducts
 a guided interview with a company admin and drafts the first version
-of their Knowledge Hub wiki. After onboarding, a `PreToolUse` hook
+of their Knowledge Hub wiki for a future conversational agent. The docs
+must carry router front matter so the adaptive context layer knows when
+to load each document. After onboarding, a `PreToolUse` hook
 keeps the tenant's approved docs synced into
 `~/.claude/memory/<tenant>/` once per session.
 
@@ -75,10 +77,14 @@ Two tokens, two purposes:
 
 ## Invariants
 
-- The command's interview calls **only** the seven MCP tools. No web
+- The command's interview calls **only** the Knowledge Hub MCP tools. No web
   fetches, shell commands, or other tools during onboarding.
-- Every submitted doc passes the server-side linter: ≤ 200 lines, all
-  required sections present, level-1 title heading.
+- Every submitted doc opens with YAML router front matter:
+  `purpose`, `read_when`, `read_full`, `depends_on`, and `code`.
+- Every submitted doc passes the server-side linter: front matter,
+  ≤ 200 lines, all required sections present, level-1 title heading.
+- Conversational tools are created through `create_conversational_tool`;
+  secrets go only through the credential field and are redacted from MCP logs.
 - The sync hook writes **only** under `~/.claude/memory/<tenant>/`.
 - Drive scans return folder + file *names* only. File contents are
   never read, transmitted, or stored.
