@@ -237,12 +237,19 @@ Rules:
 3. **Granularity**: one concept per file, but if a concept fits in
    under ~10 lines and has no children of its own, consolidate into
    the parent.
-4. **Linkage**: use standard Markdown links, not `[[wiki-link]]`.
-   The hub frontend renders `[Title](/app/docs/<document_id>)` as a
-   clickable internal document link. If the target document does not
-   exist yet or its `document_id` is not known, write plain text for now
-   and return to link it after the target is created. End every file with
-   a `## See also` section pointing at siblings/parents.
+4. **Linkage — always use `[[Doc Title]]` wiki-links for internal docs.**
+   The hub frontend resolves `[[Exact Doc Title]]` (or `[[doc-slug]]`) to a
+   clickable internal link at render time, matching by title/slug against the
+   live doc set. This is **order-independent**: you do NOT need the target's
+   `document_id`, and the target may be created before or after this doc, so
+   forward references just work. Use `[[Title|custom label]]` to override the
+   link text. **Never write a sibling/parent as plain text** — that is the #1
+   cause of broken "See also" sections (the old "write plain text and backfill
+   later" step was unreliable; the backfill rarely happened). End every file
+   with a `## See also` section linking siblings/parents via `[[...]]`.
+   (`[Title](/app/docs/<id>)` also renders, but only use it when you already
+   hold the real id — prefer `[[...]]`.) `submit_draft_document` now **rejects**
+   any "See also" bullet that has no link.
 5. **Living docs** (spreadsheets, decks, design files, planning PDFs)
    get a wiki page with:
    - `📎` and the `workspace://...` link
@@ -337,6 +344,24 @@ writer:
 
 Do not create tools for static facts that belong in docs.
 
+**Tool granularity — prefer several small, single-purpose tools over one
+polymorphic "do everything" tool.** One clear action per tool (e.g. separate
+`read` / `list` / `create` / `insert`) gives the model unambiguous descriptions
+and input schemas, keeps read separate from destructive writes, and lets the
+allowlist gate each action. Several tools may share one backend (e.g. the same
+Apps Script or API URL with different `action` params) — that is expected and
+fine. Only merge two actions into one tool when they are *always* performed
+together and never independently.
+
+**How tools reach the agent (you don't wire this manually).** Creating a tool
+with `create_conversational_tool` automatically adds it to the tenant's existing
+conversational agent(s). When the default agent is first created (after the wiki
+is populated), it is granted every tool that exists at that moment. So the agent
+always picks up new tools — create the tool, write its usage doc, and it is
+available. Likewise, the agent reads docs **by Space scope**, so any new doc you
+add under the same `scope` is automatically in the agent's context; you do not
+re-register docs with the agent.
+
 ### 5b. Edit an existing doc (post-onboarding)
 
 When the user asks you to modify a doc that already exists — "add X to
@@ -417,9 +442,15 @@ a wiki doc.
    - If `visibility === "internal"`: `link` will be `null` —
      reference the asset by title in prose; do NOT compose a
      `/app/assets/...` URL yourself.
-5. Tell the user that `/app/files` shows their uploads and that the
-   asset currently shows "pending upload" until they drop the file
-   there. The link goes live the moment the upload completes.
+5. **Always tell the user, explicitly, that the file is not uploaded yet.**
+   `register_asset` only records metadata — it never transfers the file's
+   bytes. Every registered asset shows **"pending upload"** in `/app/files`
+   until the user drops the actual file there. This is unrelated to
+   visibility: `internal` and `shareable` assets are *both* "pending upload"
+   until bytes arrive (visibility only controls whether the link is exposed
+   in user-facing markdown, not upload state). The link goes live the moment
+   the upload completes. At wrap-up (section 8), list the files still pending
+   so the user knows the manual upload step remains.
 
 ### 6b. Wiki page for living refs (when worth it)
 
@@ -470,8 +501,9 @@ Every submitted doc must:
 - Include `purpose`, `read_when`, `read_full`, `depends_on`, and `code` in that
   front matter.
 - End with a `## See also` section linking siblings or parents with
-  standard Markdown links (`[Title](/app/docs/<document_id>)`) unless
-  it's a true leaf with nothing to link.
+  `[[Doc Title]]` wiki-links (resolved by title/slug at render time — no
+  `document_id` needed, works regardless of creation order) unless it's a
+  true leaf with nothing to link. Plain-text doc names are rejected on submit.
 - Be agent-readable, not human-prose. Bullets, terse sentences, no
   fluff.
 - Echo only what the user actually said or what's in the source docs.

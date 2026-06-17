@@ -21485,6 +21485,23 @@ server.tool(
 function slugify(s) {
   return (s || "doc").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "doc";
 }
+function findPlainSeeAlso(content) {
+  const body = content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "");
+  const lines = body.split(/\r?\n/);
+  const start = lines.findIndex((l) => /^#{2,6}\s+see also\b.*$/i.test(l.trim()));
+  if (start === -1) return [];
+  const offending = [];
+  for (let i = start + 1; i < lines.length; i++) {
+    const trimmed = (lines[i] ?? "").trim();
+    if (/^#{1,6}\s+/.test(trimmed)) break;
+    const bullet = trimmed.match(/^[-*]\s+(.+)$/);
+    if (!bullet) continue;
+    const text = (bullet[1] ?? "").trim();
+    if (text === "_TBD_") continue;
+    if (!text.includes("[[") && !/\]\(/.test(text)) offending.push(text);
+  }
+  return offending;
+}
 server.tool(
   "submit_draft_document",
   "Create or update a wiki document. To UPDATE an existing doc, pass its document_id (find it in the local cache index at ~/.claude/memory/<tenant>/memory.md \u2014 every entry links to /app/docs/<id>). To CREATE a new doc, omit document_id; the server still auto-detects by (tenant, scope, slug) so you won't silently create a duplicate. doc_type is a free-form category tag (e.g. 'thesis', 'capability', 'phase', 'brand'). The `scope` is the doc's SPACE (a project / bot boundary) \u2014 ALWAYS confirm which Space a new doc belongs to with the user when it isn't explicit; call list_spaces first to show the existing Spaces. template_slug is optional. REQUIRED: content_markdown must open with a YAML front-matter block (purpose, read_when, read_full, depends_on, code) \u2014 the adaptive context router reads it to decide which docs to load per turn. Submits without front-matter (at least purpose + read_when) are rejected. Every Space that backs a conversational agent must have at least one read_full:true doc covering identity/scope, tone of voice, and guardrails \u2014 keep read_full rare (it loads on every turn).",
@@ -21496,7 +21513,7 @@ server.tool(
     space_description: external_exports.string().max(500).optional().describe("One-line description of the Space, set on first creation."),
     template_slug: external_exports.string().min(1).max(60).optional().describe("Optional. If supplied, the doc is linted against this template. Omit for free-form docs."),
     title: external_exports.string().min(1).max(200),
-    content_markdown: external_exports.string().min(1).describe("Full markdown. MUST open with a YAML front-matter block the context router reads:\n---\npurpose: <one line: what this doc covers>\nread_when: <triggers that should load this doc>\nread_full: <true|false \u2014 true loads it every turn; default false>\ndepends_on: [<related-slugs>]\ncode: []\n---\n\n# Title\n\u2026\nKeep read_full:true rare (identity/scope, tone of voice, guardrails)."),
+    content_markdown: external_exports.string().min(1).describe("Full markdown. MUST open with a YAML front-matter block the context router reads:\n---\npurpose: <one line: what this doc covers>\nread_when: <triggers that should load this doc>\nread_full: <true|false \u2014 true loads it every turn; default false>\ndepends_on: [<related-slugs>]\ncode: []\n---\n\n# Title\n\u2026\nKeep read_full:true rare (identity/scope, tone of voice, guardrails). Link internal docs with [[Exact Doc Title]] wiki-links (resolved by title/slug at render time \u2014 no document_id needed, order-independent). End with a `## See also` section whose bullets are [[...]] links; plain-text doc names are REJECTED."),
     team_slug: external_exports.string().optional().describe("Scopes the doc to a team within the tenant. Optional."),
     owner_emails: external_exports.array(external_exports.string().email()).optional(),
     source_metadata: external_exports.record(external_exports.unknown()).optional(),
@@ -21523,6 +21540,21 @@ server.tool(
           "---",
           "",
           "Set read_full: true only for identity/scope, tone-of-voice, or guardrail docs \u2014 keep it rare (loads every turn)."
+        ].join("\n")
+      );
+    }
+    const plainSeeAlso = findPlainSeeAlso(input.content_markdown);
+    if (plainSeeAlso.length) {
+      return fail(
+        '"See also" entries must be links, not plain text.',
+        [
+          "These bullets name docs as plain text and won't be clickable:",
+          ...plainSeeAlso.map((t) => `  - ${t}`),
+          "",
+          "Rewrite each as a wiki-link, e.g. `- [[Exact Doc Title]]`.",
+          "The hub resolves [[...]] by title/slug at render time, so you do NOT",
+          "need the target's document_id and it works whether the target doc is",
+          "created before or after this one. Use [[Title|label]] for custom text."
         ].join("\n")
       );
     }
