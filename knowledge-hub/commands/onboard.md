@@ -72,17 +72,23 @@ All from the `knowledge-hub-onboarding` MCP server:
   agent. Use this only for actions or live/external data access: reading outside
   wiki docs, writing to a system, calling APIs, querying a database, running
   code, or searching live data.
-  - Confirm the business need, data source, inputs, expected output, and risk
-    with the user before creating the tool.
+  - Do **not** create tools from a verbal description or guessed schema. First
+    complete the Tool Builder validation workflow in section 5a.
   - If a secret/API key is needed, ask the user for it and pass it only in
     `credential`. Never put secrets in wiki docs, tool descriptions, markdown
     front matter, chat summaries, or `config`.
   - For HTTP tools, put only non-secret auth shape in `config`
-    (`credential_header`, `credential_prefix`, static non-secret headers). The
-    actual secret/API key still goes in `credential`.
+    (`credential_header`, `credential_prefix`, `credential_query_param`,
+    `credential_body_param`, static non-secret headers). The actual secret/API
+    key still goes in `credential`.
+  - Use `credential_query_param` when the external API expects the secret as a
+    URL query parameter at runtime (for example `{ "credential_query_param":
+    "token" }`). Use `credential_body_param` when it expects the secret as a JSON
+    body field. Never hardcode the secret in `url`, `headers`, `input_schema`, or
+    docs.
   - After creating a tool, write/update a wiki doc that explains when the
     conversational agent should use it, what the tool returns, and what it must
-    not do.
+    not do, including validation evidence from the Tool Builder workflow.
 - `create_team({ name, description?, lead_email? })` — idempotent by name.
 - `register_asset({ scope?, title, filename, description?, visibility? })`
   — declare a file the user owns but did not author here (PDFs,
@@ -92,8 +98,11 @@ All from the `knowledge-hub-onboarding` MCP server:
 - `emit_event(event_type, payload?)` — instrumentation.
 - `complete_onboarding()` — finalize, mint read/write tokens.
 
-You may not call other tools, web fetches, or shell commands during the
-interview.
+Default interview rule: do not call other tools, web fetches, or shell commands.
+Exception: during the Tool Builder validation workflow in section 5a, you may use
+the minimum additional tools needed to inspect and test the target integration,
+preferably via a dedicated subagent when Claude Code offers one. Never expose
+secrets in files, docs, logs, or visible examples.
 
 ## Flow
 
@@ -268,7 +277,7 @@ For each file in the agreed tree:
    template_slug and resubmit.
 6. `emit_event("doc_documented", { document_id, scope, doc_type, title })`.
 
-### 5a. Identify and create conversational tools
+### 5a. Identify, validate, and create conversational tools
 
 While extracting or interviewing, continuously separate **knowledge** from
 **actions/live data**:
@@ -287,16 +296,44 @@ Create a conversational tool when the agent would need to:
 - check status, availability, invoice state, calendar slots, case data, or any
   changing business record.
 
-Before creating any tool:
+Before creating any tool, complete the Tool Builder validation gate. If the
+environment offers a Task/subagent tool, launch a dedicated subagent with the
+role "integration builder". If no subagent is available, run the same checklist
+inline. The builder's job is to behave like an end-to-end developer, not a doc
+writer:
 
-1. Explain the tool candidate in one sentence.
-2. Confirm the source system, required inputs, expected output, permissions, and
-   whether the result can be shown to end users.
-3. Ask for any needed API key/secret only when the tool cannot work without it.
-4. Define the tool with a precise `description` and JSON `input_schema`.
-5. Call `create_conversational_tool`.
-6. Add/update a wiki doc with front matter explaining `read_when` for the tool's
-   business scenario and the safety/permission constraints.
+1. Restate the tool candidate in one sentence and identify the source system.
+2. Collect only the missing facts needed to test safely: endpoint, available
+   test account/data, auth method, write permissions, and any constraints.
+3. Inspect the integration directly where possible. For APIs/spreadsheets, make
+   read-only discovery calls first. For spreadsheet-like systems, list actual
+   sheets/tabs, read actual headers and representative rows, and capture real
+   date, currency, status, and ID formats. Do not guess sheet names, columns,
+   status values, ranges, or payload shape.
+4. Determine the exact credential carrier: header, query parameter, or JSON body
+   field. Store the secret only through `credential`; represent the carrier in
+   config with `credential_header`, `credential_query_param`, or
+   `credential_body_param`.
+5. For read tools, run a successful read and inspect the response shape. For
+   write tools, ask explicit permission before creating/modifying data; prefer a
+   sandbox, dry-run flag, disposable test row, or reversible test. Never call
+   destructive actions such as clear/delete/createSheet without explicit user
+   confirmation for that exact action.
+6. Build a tool contract from evidence:
+   - exact method and URL, with non-secret static query params only;
+   - exact auth carrier config, without the secret value;
+   - `input_schema` containing only fields the conversational agent should
+     supply, not secret fields;
+   - sample success response and relevant error response;
+   - output filtering/mapping rules the conversational agent must apply;
+   - safety constraints and whether results may be shown to end users.
+7. If any required piece cannot be validated, do not call
+   `create_conversational_tool`. Ask the user for the missing access/spec, or
+   write a candidate integration doc marked `_TBD_`.
+8. Only after validation succeeds, call `create_conversational_tool`.
+9. Immediately add/update a wiki doc with front matter explaining `read_when` for
+   the business scenario, the validated request/response contract, sample
+   non-secret payloads, and the safety/permission constraints.
 
 Do not create tools for static facts that belong in docs.
 

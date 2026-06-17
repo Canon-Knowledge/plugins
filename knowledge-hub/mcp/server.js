@@ -21388,7 +21388,7 @@ function explain(e) {
 }
 var server = new McpServer({
   name: "knowledge-hub-onboarding",
-  version: "0.2.2"
+  version: "0.2.3"
 });
 server.tool(
   "verify_token",
@@ -21593,12 +21593,12 @@ server.tool(
 );
 server.tool(
   "create_conversational_tool",
-  "Create a tool for the future conversational agent. Use this only for live actions or external data access that docs cannot satisfy: reading outside wiki docs, writing to a system, calling an API, running code, or querying a database. Confirm intent, config, and any secret with the user first. If a credential/API key is needed, pass it in credential; it is stored server-side and never exposed back to the model.",
+  "Create a tool for the future conversational agent. Use this only for live actions or external data access that docs cannot satisfy: reading outside wiki docs, writing to a system, calling an API, running code, or querying a database. Do not call this from guesses. First validate the integration end to end: confirm source system, auth carrier, request shape, sample response, data fields, error behavior, and any write safety with the user or by testing. If a credential/API key is needed, pass it in credential; it is stored server-side and never exposed back to the model.",
   {
     name: external_exports.string().min(1).max(60).regex(/^[A-Za-z][A-Za-z0-9_]*$/).describe("Tool name exposed to the conversational model. Use snake_case, e.g. get_invoice_status."),
     description: external_exports.string().min(1).max(1e3).describe("Precise model-facing description: when to call this tool, what it does, and what it must not be used for."),
     type: external_exports.enum(["http", "supabase_rpc", "supabase_insert", "code_execution"]).describe("Runtime execution type."),
-    config: external_exports.record(external_exports.unknown()).default({}).describe("Type-specific config. http: {url, method, headers?, credential_header?, credential_prefix?}. If credential is supplied for http, auth is enabled automatically; default header is Authorization: Bearer <credential>. supabase_rpc: {rpc_name, supabase_url?}. supabase_insert: {table, columns}. code_execution: sandbox config."),
+    config: external_exports.record(external_exports.unknown()).default({}).describe("Type-specific config. http: {url, method, headers?, credential_header?, credential_prefix?, credential_query_param?, credential_body_param?}. If credential is supplied for http, auth is enabled automatically; default is Authorization: Bearer <credential>. Use credential_query_param for APIs that expect a secret query parameter, or credential_body_param for APIs that expect a secret JSON body field. Never put the secret value itself in config or input_schema. supabase_rpc: {rpc_name, supabase_url?}. supabase_insert: {table, columns}. code_execution: sandbox config."),
     input_schema: external_exports.record(external_exports.unknown()).default({}).describe("JSON Schema for tool input. Use {} for zero-arg tools."),
     zero_arg: external_exports.boolean().default(false).describe("true only when the tool takes no input and can be used in eager {{live: tool_name}} slots."),
     credential: external_exports.string().optional().describe("Optional secret/API key. Stored in Build > Tools credentials; never include it in wiki docs.")
