@@ -21122,13 +21122,25 @@ async function request(cfg2, method, path, body) {
   });
   const text = await res.text();
   const parsed = text ? safeJson(text) : null;
-  if (!res.ok) throw new ApiError(res.status, parsed ?? text);
+  const contentType = res.headers.get("content-type");
+  const preview = text.slice(0, 160).replace(/\s+/g, " ").trim();
+  if (!res.ok) {
+    throw new ApiError(
+      res.status,
+      parsed ?? {
+        error: `http_${res.status}`,
+        url,
+        content_type: contentType,
+        preview: preview ? `${preview}${text.length > 160 ? "..." : ""}` : "(empty)",
+        hint: `${url} returned ${res.status}. If this is a frontend 404 page, the MCP is pointed at the wrong app/branch or the deployed app is missing this API route.`
+      }
+    );
+  }
   if (parsed === null) {
-    const preview = text.slice(0, 80).replace(/\s+/g, " ").trim();
     throw new ApiError(502, {
       error: "non_json_response",
-      content_type: res.headers.get("content-type"),
-      preview: preview ? `${preview}${text.length > 80 ? "\u2026" : ""}` : "(empty)",
+      content_type: contentType,
+      preview: preview ? `${preview}${text.length > 160 ? "..." : ""}` : "(empty)",
       hint: `${url} returned 200 but the body isn't JSON \u2014 the SaaS API likely isn't routing this path. Restart the dev server, or confirm the route file exists.`
     });
   }
@@ -21164,30 +21176,73 @@ function isValidHttpUrl(s) {
     return false;
   }
 }
-async function resolveBaseUrl() {
-  const candidates = [
-    process.env.KH_API_BASE_URL,
-    process.env.CLAUDE_PLUGIN_OPTION_api_base_url
-  ];
-  for (const c of candidates) {
-    if (isValidHttpUrl(c)) return c;
+function getAtPath(obj, path) {
+  let current2 = obj;
+  for (const key of path) {
+    if (!current2 || typeof current2 !== "object") return void 0;
+    current2 = current2[key];
   }
+  return current2;
+}
+async function readJsonFile(filePath) {
+  const fs = await import("node:fs/promises");
+  return JSON.parse(await fs.readFile(filePath, "utf8"));
+}
+async function readClaudeSettingsBaseUrl() {
   try {
-    const fs = await import("node:fs/promises");
     const path = await import("node:path");
     const os = await import("node:os");
-    const cfg2 = JSON.parse(
-      await fs.readFile(
-        path.join(os.homedir(), ".config", "knowledge-hub", "config.json"),
-        "utf8"
-      )
-    );
-    if (isValidHttpUrl(cfg2.api_base_url)) return cfg2.api_base_url;
+    const settingsPath = path.join(os.homedir(), ".claude", "settings.json");
+    const settings = await readJsonFile(settingsPath);
+    const pluginConfigs = getAtPath(settings, ["pluginConfigs"]);
+    if (!pluginConfigs || typeof pluginConfigs !== "object") return null;
+    for (const [pluginKey, pluginConfig] of Object.entries(pluginConfigs)) {
+      if (pluginKey !== "knowledge-hub" && !pluginKey.startsWith("knowledge-hub@")) continue;
+      const apiBaseUrl = getAtPath(pluginConfig, ["options", "api_base_url"]);
+      if (typeof apiBaseUrl === "string" && isValidHttpUrl(apiBaseUrl)) {
+        return {
+          url: apiBaseUrl,
+          source: `~/.claude/settings.json pluginConfigs.${pluginKey}.options.api_base_url`
+        };
+      }
+    }
   } catch {
   }
-  return "http://localhost:8081";
+  return null;
+}
+async function readKnowledgeHubConfigBaseUrl() {
+  try {
+    const path = await import("node:path");
+    const os = await import("node:os");
+    const cfgPath = path.join(os.homedir(), ".config", "knowledge-hub", "config.json");
+    const cfg2 = await readJsonFile(cfgPath);
+    const apiBaseUrl = getAtPath(cfg2, ["api_base_url"]);
+    if (typeof apiBaseUrl === "string" && isValidHttpUrl(apiBaseUrl)) {
+      return {
+        url: apiBaseUrl,
+        source: "~/.config/knowledge-hub/config.json api_base_url"
+      };
+    }
+  } catch {
+  }
+  return null;
+}
+async function resolveBaseUrl() {
+  const envCandidates = [
+    ["KH_API_BASE_URL", process.env.KH_API_BASE_URL],
+    ["CLAUDE_PLUGIN_OPTION_api_base_url", process.env.CLAUDE_PLUGIN_OPTION_api_base_url]
+  ];
+  for (const [source, url] of envCandidates) {
+    if (isValidHttpUrl(url)) return { url, source };
+  }
+  const claudeSettingsUrl = await readClaudeSettingsBaseUrl();
+  if (claudeSettingsUrl) return claudeSettingsUrl;
+  const savedConfigUrl = await readKnowledgeHubConfigBaseUrl();
+  if (savedConfigUrl) return savedConfigUrl;
+  return { url: "http://localhost:8081", source: "hard-coded local dev fallback" };
 }
 var KH_API_BASE_URL = "http://localhost:8081";
+var KH_API_BASE_SOURCE = "initial local dev fallback";
 function cfg(token) {
   return { baseUrl: KH_API_BASE_URL, token: token ?? getSession().token };
 }
@@ -21272,7 +21327,13 @@ async function logEvent(event) {
 }
 function instrument(toolName, fn) {
   return async (args) => {
-    void logEvent({ tool: toolName, action: "call", args: summarizeArgs(args) });
+    void logEvent({
+      tool: toolName,
+      action: "call",
+      api_base_url: KH_API_BASE_URL,
+      api_base_source: KH_API_BASE_SOURCE,
+      args: summarizeArgs(args)
+    });
     try {
       const result = await fn(args);
       void logEvent({
@@ -21302,6 +21363,16 @@ function explain(e) {
     if (e.status === 401) return "Token invalid, expired, or revoked. Ask the admin to regenerate at /onboarding in the SaaS.";
     if (e.status === 403) return `Forbidden: ${e.message}`;
     if (e.status === 422) return `Validation failed: ${JSON.stringify(e.body)}`;
+    if (e.status === 404) {
+      const body = e.body;
+      const parts = [
+        body?.hint ?? `API route not found: ${e.message}`,
+        body?.url ? `url: ${body.url}` : null,
+        body?.content_type ? `content-type: ${body.content_type}` : null,
+        body?.preview ? `body preview: ${body.preview}` : null
+      ].filter(Boolean);
+      return parts.join("\n");
+    }
     if (e.status === 502) {
       const body = e.body;
       const parts = [
@@ -21317,7 +21388,7 @@ function explain(e) {
 }
 var server = new McpServer({
   name: "knowledge-hub-onboarding",
-  version: "0.2.1"
+  version: "0.2.2"
 });
 server.tool(
   "verify_token",
@@ -21675,7 +21746,15 @@ async function autoLoadWriteToken() {
   } catch {
   }
 }
-KH_API_BASE_URL = await resolveBaseUrl();
+var resolvedBaseUrl = await resolveBaseUrl();
+KH_API_BASE_URL = resolvedBaseUrl.url;
+KH_API_BASE_SOURCE = resolvedBaseUrl.source;
+await logEvent({
+  tool: "mcp",
+  action: "boot",
+  api_base_url: KH_API_BASE_URL,
+  api_base_source: KH_API_BASE_SOURCE
+});
 await autoLoadWriteToken();
 var transport = new StdioServerTransport();
 await server.connect(transport);
