@@ -14,6 +14,12 @@ to load each document. After onboarding, a `PreToolUse` hook
 keeps the tenant's approved docs synced into
 `~/.claude/memory/<tenant>/` once per session.
 
+Also provides the **`feedback-triage`** skill: it navigates the feedback left on
+the tenant's conversational agent, talks the issues and fix plans through with
+the user, then fixes what's in canon scope (docs + tools) and escalates platform
+issues to the Knowledge Hub team. It auto-triggers on feedback-triage intent and
+replaces the former `/triage-feedback` command (single entry point, no overlap).
+
 ## Layout
 
 ```
@@ -21,6 +27,8 @@ keeps the tenant's approved docs synced into
   plugin.json                  # Manifest (mcpServers, hooks, userConfig)
 commands/
   onboard.md                   # The /onboard slash command + interview script
+skills/
+  feedback-triage/SKILL.md     # Navigate + triage agent feedback; fix canon, escalate SaaS
 hooks/
   sync-canon.sh                # PreToolUse wrapper
   sync_canon.py                # Pull-once-per-session worker

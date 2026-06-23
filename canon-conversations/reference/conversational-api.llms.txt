@@ -1,0 +1,81 @@
+# Canon Conversational API integration guide for coding agents
+
+This file is optimized for AI coding agents integrating Canon conversations into
+customer applications.
+
+Canonical contract:
+- OpenAPI: docs/conversational-api.openapi.json
+- TypeScript schemas/client: packages/shared/src/conversational-api.ts and
+  packages/shared/src/conversations-client.ts
+- Human RFC: docs/conversational-api-rfc.md
+
+Current implementation status:
+- The public API contract, Problem Details errors, request IDs, idempotency
+  parsing, end-user hashing helpers, and a small TypeScript client skeleton
+  exist in code.
+- The Lovable-served app implements secret-key conversation create/send/read and
+  feedback endpoints, plus raw usage event writes for future billing.
+- The file upload and client-session endpoints still return structured
+  not_configured responses.
+- Message sending requires ANTHROPIC_API_KEY in the Lovable production
+  environment. Database access uses SUPABASE_JWT_SECRET when present, or the
+  existing server-side SUPA_SERVICE_ROLE_KEY fallback in the Lovable app.
+
+Recommended integration architecture:
+1. Keep CANON_API_KEY on the customer's server only.
+2. Browser/mobile clients call the customer's backend.
+3. The customer's backend calls Canon with Authorization: Bearer cc_live_...
+4. Use Idempotency-Key on POST requests that create conversations, messages,
+   files, or feedback.
+5. Pass X-Request-Id from the customer app when available and log the returned
+   X-Request-Id for support.
+6. Pass end_user.id as a stable opaque customer-side identifier. Canon hashes it
+   before storage. Do not send raw emails unless the customer explicitly accepts
+   that risk.
+
+Required customer server environment variables:
+- CANON_API_BASE_URL
+- CANON_API_KEY
+- CANON_AGENT_ID or CANON_AGENT_SLUG
+- CANON_CHANNEL_KEY
+
+Minimal server flow:
+1. POST /v1/conversations with agent_id or agent_slug, channel, end_user, and
+   optional metadata.
+2. Store the returned conversation id in the customer's session or database.
+3. POST /v1/conversations/{conversation_id}/messages with role "user" and
+   content.
+4. Render response.content output_text blocks to the end user.
+5. Optionally POST /v1/conversations/{conversation_id}/feedback.
+
+Safe defaults:
+- Prefer agent_id when available; agent_slug is useful for human-readable app
+  config.
+- channel.type should be web_app, mobile_app, api, or other unless using the
+  Canon widget.
+- channel.key should be stable and environment-specific, for example
+  production-dashboard-chat.
+- Use stream=false unless the target app already has robust SSE handling.
+- For V1 conversation retrieval, display only end-user-visible messages. Do not
+  expose internal prompts, tool inputs, tool outputs, traces, or provider
+  payloads to end users.
+
+Error handling:
+- Non-stream errors use application/problem+json.
+- Read problem.code, problem.detail, and problem.request_id.
+- Show safe generic messages to end users for upstream_unavailable,
+  internal_error, tool_execution_failed, and safety_blocked.
+- Log request_id and conversation_id on the customer server.
+
+Multimodal status:
+- The public contract supports input_text, input_image, and input_file blocks.
+- File upload is planned at POST /v1/files.
+- Conversation files should expire by default after 7 days. Treat file ids as
+  temporary references, not permanent storage.
+
+Do not:
+- Do not put CANON_API_KEY in browser code.
+- Do not store Canon API keys in client-side env vars.
+- Do not send customer auth tokens unless a specific Canon tool requires them.
+- Do not log customer auth tokens, Authorization headers, or file signed URLs.
+- Do not depend on billing/quota endpoints yet.

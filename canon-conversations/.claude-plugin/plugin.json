@@ -1,0 +1,29 @@
+{
+  "name": "canon-conversations",
+  "displayName": "Canon Conversations",
+  "version": "0.2.0",
+  "description": "Coding-agent-first integration workflows for Canon conversational agents.",
+  "author": {
+    "name": "Canon Knowledge",
+    "url": "https://github.com/Canon-Knowledge"
+  },
+  "homepage": "https://github.com/Canon-Knowledge/plugins",
+  "keywords": ["conversations", "agents", "api", "integration"],
+  "userConfig": {
+    "api_base_url": {
+      "type": "string",
+      "title": "API base URL",
+      "description": "Canon Conversational API base URL. Use the production API URL or a local runtime URL."
+    },
+    "agent_reference": {
+      "type": "string",
+      "title": "Default agent reference",
+      "description": "Optional default agent_id or agent_slug to use in integration examples."
+    },
+    "channel_key": {
+      "type": "string",
+      "title": "Default channel key",
+      "description": "Optional stable channel key, for example production-dashboard-chat."
+    }
+  }
+}

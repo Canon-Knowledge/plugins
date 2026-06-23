@@ -1,0 +1,1007 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Canon Conversational API",
+    "version": "0.1.0",
+    "description": "Draft public API contract for running Canon conversational agents from customer-controlled interfaces."
+  },
+  "servers": [
+    {
+      "url": "https://<your-canon-lovable-app-domain>"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/v1/conversations": {
+      "post": {
+        "operationId": "createConversation",
+        "summary": "Create a conversation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateConversationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Conversation created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "get": {
+        "operationId": "listConversations",
+        "summary": "List conversations",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agent_slug",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "channel_key",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end_user_id",
+            "in": "query",
+            "description": "Raw customer end-user id supplied by the caller. Runtime hashes it before lookup.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Conversation list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["object", "data", "has_more", "next_cursor"],
+                  "properties": {
+                    "object": {
+                      "const": "list"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Conversation"
+                      }
+                    },
+                    "has_more": {
+                      "type": "boolean"
+                    },
+                    "next_cursor": {
+                      "type": ["string", "null"]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/v1/conversations/{conversation_id}/messages": {
+      "post": {
+        "operationId": "sendMessage",
+        "summary": "Send a user message and create an assistant response",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ConversationId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendMessageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Assistant response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SendMessageResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "get": {
+        "operationId": "listMessages",
+        "summary": "List end-user-visible conversation messages",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ConversationId"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "starting_after",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Message list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListMessagesResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/v1/conversations/{conversation_id}/feedback": {
+      "post": {
+        "operationId": "submitFeedback",
+        "summary": "Submit customer conversation feedback",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ConversationId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeedbackRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Feedback accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["id", "object"],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "object": {
+                      "const": "conversation_feedback"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/v1/files": {
+      "post": {
+        "operationId": "uploadFile",
+        "summary": "Upload a file for multimodal conversation use",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["file", "purpose"],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  },
+                  "purpose": {
+                    "const": "conversation"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Uploaded file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "415": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/v1/client_sessions": {
+      "post": {
+        "operationId": "createClientSession",
+        "summary": "Create a scoped browser-safe client session",
+        "description": "Deferred V1+ endpoint. The runtime currently returns not_configured until scoped client-session storage is added.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClientSessionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Client session created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientSession"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "501": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "parameters": {
+      "ConversationId": {
+        "name": "conversation_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "schema": {
+          "type": "string",
+          "maxLength": 255
+        }
+      },
+      "RequestId": {
+        "name": "X-Request-Id",
+        "in": "header",
+        "schema": {
+          "type": "string",
+          "maxLength": 128
+        }
+      }
+    },
+    "headers": {
+      "RequestId": {
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    "responses": {
+      "Problem": {
+        "description": "Problem Details error",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "CreateConversationRequest": {
+        "type": "object",
+        "required": ["channel", "end_user"],
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "agent_slug": {
+            "type": "string"
+          },
+          "channel": {
+            "$ref": "#/components/schemas/Channel"
+          },
+          "end_user": {
+            "$ref": "#/components/schemas/EndUser"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "anyOf": [
+          {
+            "required": ["agent_id"]
+          },
+          {
+            "required": ["agent_slug"]
+          }
+        ]
+      },
+      "SendMessageRequest": {
+        "type": "object",
+        "required": ["content"],
+        "properties": {
+          "role": {
+            "const": "user"
+          },
+          "content": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 20,
+                "items": {
+                  "$ref": "#/components/schemas/InputContentBlock"
+                }
+              }
+            ]
+          },
+          "stream": {
+            "type": "boolean",
+            "default": false
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "SendMessageResponse": {
+        "type": "object",
+        "required": ["id", "object", "conversation_id", "response"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "const": "message"
+          },
+          "conversation_id": {
+            "type": "string"
+          },
+          "response": {
+            "$ref": "#/components/schemas/AssistantResponse"
+          }
+        }
+      },
+      "Conversation": {
+        "type": "object",
+        "required": ["id", "object", "agent_id", "agent_version_id", "channel", "end_user", "status", "created_at"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "const": "conversation"
+          },
+          "agent_id": {
+            "type": "string"
+          },
+          "agent_slug": {
+            "type": "string"
+          },
+          "agent_name": {
+            "type": "string"
+          },
+          "agent_version_id": {
+            "type": "string"
+          },
+          "agent_version_label": {
+            "type": "string"
+          },
+          "channel": {
+            "$ref": "#/components/schemas/ChannelRef"
+          },
+          "end_user": {
+            "$ref": "#/components/schemas/EndUserRef"
+          },
+          "status": {
+            "enum": ["active", "closed"]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Message": {
+        "type": "object",
+        "required": ["id", "object", "conversation_id", "role", "content", "created_at"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "const": "message"
+          },
+          "conversation_id": {
+            "type": "string"
+          },
+          "role": {
+            "enum": ["user", "assistant"]
+          },
+          "content": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/InputContentBlock"
+                },
+                {
+                  "$ref": "#/components/schemas/OutputContentBlock"
+                }
+              ]
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/Usage"
+          }
+        }
+      },
+      "ListMessagesResponse": {
+        "type": "object",
+        "required": ["object", "data", "has_more", "next_cursor"],
+        "properties": {
+          "object": {
+            "const": "list"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            }
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "type": ["string", "null"]
+          }
+        }
+      },
+      "Channel": {
+        "type": "object",
+        "required": ["type", "key"],
+        "properties": {
+          "type": {
+            "enum": ["web_widget", "web_app", "mobile_app", "whatsapp", "slack", "sms", "email", "api", "other"]
+          },
+          "key": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "ChannelRef": {
+        "type": "object",
+        "required": ["type", "key"],
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          }
+        }
+      },
+      "EndUser": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "display": {
+            "type": "string"
+          },
+          "auth": {
+            "$ref": "#/components/schemas/EndUserAuth"
+          },
+          "traits": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "EndUserAuth": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "enum": ["anonymous", "authenticated", "verified"],
+            "default": "anonymous"
+          },
+          "token_type": {
+            "enum": ["bearer", "custom"]
+          },
+          "token": {
+            "type": "string",
+            "writeOnly": true
+          },
+          "subject": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "claims": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "EndUserRef": {
+        "type": "object",
+        "required": ["id_hash"],
+        "properties": {
+          "id_hash": {
+            "type": "string"
+          },
+          "display": {
+            "type": ["string", "null"]
+          }
+        }
+      },
+      "InputContentBlock": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/InputTextBlock"
+          },
+          {
+            "$ref": "#/components/schemas/InputImageBlock"
+          },
+          {
+            "$ref": "#/components/schemas/InputFileBlock"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "type"
+        }
+      },
+      "InputTextBlock": {
+        "type": "object",
+        "required": ["type", "text"],
+        "properties": {
+          "type": {
+            "const": "input_text"
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "InputImageBlock": {
+        "type": "object",
+        "required": ["type", "file_id", "media_type"],
+        "properties": {
+          "type": {
+            "const": "input_image"
+          },
+          "file_id": {
+            "type": "string"
+          },
+          "media_type": {
+            "type": "string"
+          },
+          "detail": {
+            "enum": ["auto", "low", "high"],
+            "default": "auto"
+          }
+        }
+      },
+      "InputFileBlock": {
+        "type": "object",
+        "required": ["type", "file_id", "media_type"],
+        "properties": {
+          "type": {
+            "const": "input_file"
+          },
+          "file_id": {
+            "type": "string"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "media_type": {
+            "type": "string"
+          }
+        }
+      },
+      "OutputContentBlock": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OutputTextBlock"
+          },
+          {
+            "$ref": "#/components/schemas/OutputFileBlock"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "type"
+        }
+      },
+      "OutputTextBlock": {
+        "type": "object",
+        "required": ["type", "text"],
+        "properties": {
+          "type": {
+            "const": "output_text"
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "OutputFileBlock": {
+        "type": "object",
+        "required": ["type", "file_id", "media_type"],
+        "properties": {
+          "type": {
+            "const": "output_file"
+          },
+          "file_id": {
+            "type": "string"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "media_type": {
+            "type": "string"
+          }
+        }
+      },
+      "AssistantResponse": {
+        "type": "object",
+        "required": ["id", "status", "content", "usage"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "enum": ["completed", "failed", "cancelled"]
+          },
+          "content": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutputContentBlock"
+            }
+          },
+          "usage": {
+            "$ref": "#/components/schemas/Usage"
+          }
+        }
+      },
+      "Usage": {
+        "type": "object",
+        "required": ["input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "tool_calls"],
+        "properties": {
+          "input_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "output_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "cache_read_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "cache_write_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tool_calls": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "FeedbackRequest": {
+        "type": "object",
+        "required": ["comment"],
+        "properties": {
+          "message_id": {
+            "type": "string"
+          },
+          "rating": {
+            "enum": ["good", "bad"]
+          },
+          "category": {
+            "type": "string",
+            "default": "general"
+          },
+          "severity": {
+            "enum": ["low", "medium", "high"],
+            "default": "medium"
+          },
+          "comment": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "default": "customer_app"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "FileObject": {
+        "type": "object",
+        "required": ["id", "purpose", "filename", "media_type", "bytes", "created_at", "expires_at"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "purpose": {
+            "const": "conversation"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "media_type": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ClientSessionRequest": {
+        "type": "object",
+        "required": ["channel", "end_user"],
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "agent_slug": {
+            "type": "string"
+          },
+          "channel": {
+            "$ref": "#/components/schemas/Channel"
+          },
+          "end_user": {
+            "$ref": "#/components/schemas/EndUser"
+          },
+          "ttl_seconds": {
+            "type": "integer",
+            "minimum": 60,
+            "maximum": 3600,
+            "default": 900
+          }
+        },
+        "anyOf": [
+          {
+            "required": ["agent_id"]
+          },
+          {
+            "required": ["agent_slug"]
+          }
+        ]
+      },
+      "ClientSession": {
+        "type": "object",
+        "required": ["client_secret", "expires_at"],
+        "properties": {
+          "client_secret": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Problem": {
+        "type": "object",
+        "required": ["type", "title", "status", "detail", "code"],
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "param": {
+            "type": "string"
+          },
+          "retry_after_ms": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    }
+  }
+}

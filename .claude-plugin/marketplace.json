@@ -7,6 +7,10 @@
     {
       "name": "knowledge-hub",
       "source": "./knowledge-hub"
+    },
+    {
+      "name": "canon-conversations",
+      "source": "./canon-conversations"
     }
   ]
 }
