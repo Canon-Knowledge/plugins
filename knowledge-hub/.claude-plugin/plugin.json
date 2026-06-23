@@ -1,8 +1,8 @@
 {
   "name": "knowledge-hub",
   "displayName": "Knowledge Hub",
-  "version": "0.2.3",
-  "description": "Guided onboarding for your Knowledge Hub wiki, plus per-session canon sync.",
+  "version": "0.3.1",
+  "description": "Guided onboarding for your Knowledge Hub wiki, per-session canon sync, and conversational-agent feedback triage + fixes.",
   "author": {
     "name": "Knowledge Hub",
     "url": "https://knowledgehub.com"

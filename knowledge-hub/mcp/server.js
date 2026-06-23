@@ -21388,7 +21388,7 @@ function explain(e) {
 }
 var server = new McpServer({
   name: "knowledge-hub-onboarding",
-  version: "0.2.3"
+  version: "0.3.1"
 });
 server.tool(
   "verify_token",
@@ -21625,7 +21625,7 @@ server.tool(
 );
 server.tool(
   "create_conversational_tool",
-  "Create a tool for the future conversational agent. Use this only for live actions or external data access that docs cannot satisfy: reading outside wiki docs, writing to a system, calling an API, running code, or querying a database. Do not call this from guesses. First validate the integration end to end: confirm source system, auth carrier, request shape, sample response, data fields, error behavior, and any write safety with the user or by testing. If a credential/API key is needed, pass it in credential; it is stored server-side and never exposed back to the model.",
+  "Create a tool for the future conversational agent. Use this only for live actions or external data access that docs cannot satisfy: reading outside wiki docs, writing to a system, calling an API, running code, or querying a database. Do not call this from guesses. First validate the integration end to end: confirm source system, auth carrier, request shape, sample response, data fields, error behavior, and any write safety with the user or by testing. CREDENTIALS: if the user has given you the real API key/token/secret, you MUST pass that exact value in `credential` on this call. The value is write-only \u2014 stored server-side and never echoed back to the model \u2014 so passing it is safe and expected. Never substitute a placeholder, fake, example, redacted, or altered value, and never silently drop it expecting the user to paste it later. Only when the user has NOT provided the secret should you create the tool without `credential` and then tell them to add it in the app under Build > Tools (the credential field there is editable).",
   {
     name: external_exports.string().min(1).max(60).regex(/^[A-Za-z][A-Za-z0-9_]*$/).describe("Tool name exposed to the conversational model. Use snake_case, e.g. get_invoice_status."),
     description: external_exports.string().min(1).max(1e3).describe("Precise model-facing description: when to call this tool, what it does, and what it must not be used for."),
@@ -21633,7 +21633,7 @@ server.tool(
     config: external_exports.record(external_exports.unknown()).default({}).describe("Type-specific config. http: {url, method, headers?, credential_header?, credential_prefix?, credential_query_param?, credential_body_param?}. If credential is supplied for http, auth is enabled automatically; default is Authorization: Bearer <credential>. Use credential_query_param for APIs that expect a secret query parameter, or credential_body_param for APIs that expect a secret JSON body field. Never put the secret value itself in config or input_schema. supabase_rpc: {rpc_name, supabase_url?}. supabase_insert: {table, columns}. code_execution: sandbox config."),
     input_schema: external_exports.record(external_exports.unknown()).default({}).describe("JSON Schema for tool input. Use {} for zero-arg tools."),
     zero_arg: external_exports.boolean().default(false).describe("true only when the tool takes no input and can be used in eager {{live: tool_name}} slots."),
-    credential: external_exports.string().optional().describe("Optional secret/API key. Stored in Build > Tools credentials; never include it in wiki docs.")
+    credential: external_exports.string().optional().describe("The real secret/API key/token, when the user has provided one. Pass the exact value verbatim \u2014 never a placeholder, fake, example, or modified value. Stored write-only in Build > Tools credentials (never echoed back, never put in wiki docs). Omit only when you genuinely don't have the secret yet; the user can then add it via the editable credential field under Build > Tools.")
   },
   instrument("create_conversational_tool", async (input) => {
     try {
@@ -21778,6 +21778,186 @@ async function autoLoadWriteToken() {
   } catch {
   }
 }
+server.tool(
+  "list_feedback",
+  "List this tenant's conversational-agent feedback so you can triage it. Defaults to open + triaged items (the actionable queue). Each item includes its scope (customer | saas | unknown), status, rating, category, severity, the comment, and any linked fix plan. Call this first when the user asks to review or fix their agent's feedback.",
+  {
+    status: external_exports.enum(["open", "triaged", "resolved", "ignored"]).optional().describe("Filter by status. Omit to get open + triaged."),
+    scope: external_exports.enum(["customer", "saas", "unknown"]).optional().describe("Filter by routing scope. Customer-fixable items are 'customer' or 'unknown'.")
+  },
+  async ({ status, scope }) => {
+    try {
+      const params = new URLSearchParams();
+      if (status) params.set("status", status);
+      if (scope) params.set("scope", scope);
+      const qs = params.toString();
+      const result = await request(cfg(), "GET", qs ? `/api/feedback?${qs}` : "/api/feedback");
+      return ok(result);
+    } catch (e) {
+      return fail("Failed to list feedback.", explain(e));
+    }
+  }
+);
+server.tool(
+  "list_fix_plans",
+  "List this tenant's customer-scope fix plans (the unit of work for treating feedback). Optionally filter to the plan linked to one feedback item. Shows status, root_cause, the plan body, verification, and recurrence flags.",
+  {
+    feedback_id: external_exports.string().uuid().optional().describe("Return only the plan linked to this feedback item.")
+  },
+  async ({ feedback_id }) => {
+    try {
+      const path = feedback_id ? `/api/fix-plans?feedbackId=${encodeURIComponent(feedback_id)}` : "/api/fix-plans";
+      const result = await request(cfg(), "GET", path);
+      return ok(result);
+    } catch (e) {
+      return fail("Failed to list fix plans.", explain(e));
+    }
+  }
+);
+server.tool(
+  "propose_fix_plan",
+  "Create a customer-scope fix plan for a feedback item. Write a clear plan_md (root cause + the canon/tool changes you'll make) and list proposed_actions (typed steps). The plan starts as 'draft' and MUST be approved (record_plan_approval) before you execute it. If feedback_id is given, the feedback is linked to the plan and marked triaged.",
+  {
+    title: external_exports.string().min(1).max(160).describe("Short title for the plan."),
+    plan_md: external_exports.string().optional().describe("Human-readable plan: root cause + the fix."),
+    root_cause: external_exports.string().optional().describe(
+      "Taxonomy: stale_doc | missing_doc | wrong_routing | bad_tool | prompt_policy | out_of_scope."
+    ),
+    feedback_id: external_exports.string().uuid().optional().describe("Feedback item this plan addresses (links it + marks it triaged)."),
+    proposed_actions: external_exports.array(external_exports.record(external_exports.unknown())).optional().describe(
+      "Typed steps, e.g. [{type:'edit_doc', slug:'...', why:'...'}]. Customer action types: edit_doc, create_doc, restructure_docs, change_format, fix_placeholder, adjust_scope, edit_tool, create_tool."
+    )
+  },
+  async ({ title, plan_md, root_cause, feedback_id, proposed_actions }) => {
+    try {
+      const result = await request(cfg(), "POST", "/api/fix-plans", {
+        action: "create",
+        title,
+        plan_md,
+        root_cause,
+        feedbackId: feedback_id,
+        proposed_actions
+      });
+      return ok(result);
+    } catch (e) {
+      return fail("Failed to create fix plan.", explain(e));
+    }
+  }
+);
+server.tool(
+  "record_plan_approval",
+  "Record the user's approval of a fix plan, captured from this conversation (stored exactly like a web approval). Only call this AFTER the user has explicitly approved the plan. Once approved you may execute the plan's canon/tool changes via submit_draft_document / the tool-creation tools.",
+  {
+    plan_id: external_exports.string().uuid().describe("The fix plan the user approved.")
+  },
+  async ({ plan_id }) => {
+    try {
+      const result = await request(cfg(), "POST", "/api/fix-plans", {
+        action: "approve",
+        planId: plan_id
+      });
+      return ok(result);
+    } catch (e) {
+      return fail("Failed to record approval.", explain(e));
+    }
+  }
+);
+server.tool(
+  "update_fix_plan",
+  "Update a fix plan: change its status, refine plan_md, or write the verification outcome + final status after executing it. Use `verification` to record whether the fix worked \u2014 method ('tool_check' for tool fixes, 'response_behavior' for content fixes) and outcome ('fixed' | 'improved' | 'no_change' | 'regressed' | 'inconclusive') with evidence.",
+  {
+    plan_id: external_exports.string().uuid(),
+    status: external_exports.enum([
+      "draft",
+      "awaiting_approval",
+      "approved",
+      "rejected",
+      "executing",
+      "verifying",
+      "done",
+      "failed"
+    ]).optional(),
+    plan_md: external_exports.string().optional(),
+    final_status_md: external_exports.string().optional().describe("Summary written after execution + verification."),
+    verification: external_exports.object({
+      method: external_exports.enum(["tests", "tool_check", "response_behavior", "manual"]),
+      outcome: external_exports.enum(["fixed", "improved", "no_change", "regressed", "inconclusive"]),
+      evidence: external_exports.string().optional()
+    }).optional()
+  },
+  async ({ plan_id, status, plan_md, final_status_md, verification }) => {
+    try {
+      const result = await request(cfg(), "POST", "/api/fix-plans", {
+        action: "update",
+        planId: plan_id,
+        status,
+        plan_md,
+        final_status_md,
+        verification
+      });
+      return ok(result);
+    } catch (e) {
+      return fail("Failed to update fix plan.", explain(e));
+    }
+  }
+);
+server.tool(
+  "update_feedback_status",
+  "Set the status of a feedback item: 'triaged' once understood, 'resolved' once the fix is live and verified, or 'ignored' if it needs no action.",
+  {
+    feedback_id: external_exports.string().uuid(),
+    status: external_exports.enum(["open", "triaged", "resolved", "ignored"])
+  },
+  async ({ feedback_id, status }) => {
+    try {
+      const result = await request(cfg(), "POST", "/api/feedback", {
+        action: "set_status",
+        feedbackId: feedback_id,
+        status
+      });
+      return ok(result);
+    } catch (e) {
+      return fail("Failed to update feedback status.", explain(e));
+    }
+  }
+);
+server.tool(
+  "escalate_to_saas",
+  "Escalate a feedback item to the Knowledge Hub SaaS team when the root cause is OUTSIDE customer scope (a runtime, router, widget, or plugin issue \u2014 not fixable by editing canon docs or tools). Marks it as a SaaS-scope issue visible to staff, with your note attached. Use only after confirming the fix isn't a canon/tool change.",
+  {
+    feedback_id: external_exports.string().uuid(),
+    note: external_exports.string().max(2e3).optional().describe("Why this is a SaaS/platform issue and what you observed."),
+    logs_ref: external_exports.string().optional().describe("Optional reference (conversation/trace id) for staff to inspect.")
+  },
+  async ({ feedback_id, note, logs_ref }) => {
+    try {
+      const result = await request(cfg(), "POST", "/api/feedback", {
+        action: "escalate",
+        feedbackId: feedback_id,
+        note,
+        logs_ref
+      });
+      return ok(result);
+    } catch (e) {
+      return fail("Failed to escalate feedback.", explain(e));
+    }
+  }
+);
+server.tool(
+  "replay_conversation",
+  "v1-lite verification: re-ask the offending user turn (from a feedback item) against the agent's CURRENT published state and return the old vs new answer, so you can judge whether your fix worked. Read both answers, decide the outcome, then record it via update_fix_plan({ verification }). Note: this runs a real agent turn and creates a throwaway replay conversation.",
+  {
+    feedback_id: external_exports.string().uuid().describe("The feedback item whose offending turn to replay.")
+  },
+  async ({ feedback_id }) => {
+    try {
+      const result = await request(cfg(), "POST", "/api/replay", { feedbackId: feedback_id });
+      return ok(result);
+    } catch (e) {
+      return fail("Failed to replay conversation.", explain(e));
+    }
+  }
+);
 var resolvedBaseUrl = await resolveBaseUrl();
 KH_API_BASE_URL = resolvedBaseUrl.url;
 KH_API_BASE_SOURCE = resolvedBaseUrl.source;
