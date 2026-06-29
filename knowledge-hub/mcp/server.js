@@ -21958,6 +21958,55 @@ server.tool(
     }
   }
 );
+server.tool(
+  "get_memory_schema",
+  "Read the memory schema for this tenant: the built-in core fact types, the tenant default config, and (if space_slug is given) a space's memory_config. Call this before designing or editing memory so you know the current taxonomy and settings.",
+  {
+    space_slug: external_exports.string().optional().describe("Also read this space's (bot's) memory_config.")
+  },
+  async ({ space_slug }) => {
+    try {
+      const path = space_slug ? `/api/memory-schema?spaceSlug=${encodeURIComponent(space_slug)}` : "/api/memory-schema";
+      const result = await request(cfg(), "GET", path);
+      return ok(result);
+    } catch (e) {
+      return fail("Failed to read memory schema.", explain(e));
+    }
+  }
+);
+server.tool(
+  "set_memory_schema",
+  "Author or update the memory schema \u2014 what the agent durably remembers about each end user. Writes at SPACE level by default (the bot's business unit); pass level:'tenant' for the account-wide default. Fields are MERGED into the existing config by default; pass mode:'set' to replace it. Use taxonomy.extensions for business-specific fact types beyond the core (e.g. ['warranty','loyalty_tier']); set memory_mode, min_inject_confidence (0-1), member_visibility, or retention_days as needed. Only call AFTER the user approves the proposed schema.",
+  {
+    level: external_exports.enum(["space", "tenant"]).optional().describe("Default 'space'. Use 'tenant' for the account-wide default."),
+    space_slug: external_exports.string().optional().describe("Required when level is 'space': the bot/space slug to configure."),
+    mode: external_exports.enum(["merge", "set"]).optional().describe("Default 'merge'. 'set' replaces the whole config."),
+    memory_config: external_exports.object({
+      memory_mode: external_exports.enum(["on", "off"]).optional(),
+      min_inject_confidence: external_exports.number().min(0).max(1).optional(),
+      retention_days: external_exports.number().int().positive().nullable().optional(),
+      member_visibility: external_exports.enum(["full", "masked", "admin_only"]).optional(),
+      taxonomy: external_exports.object({
+        core: external_exports.array(external_exports.string()).optional(),
+        extensions: external_exports.array(external_exports.string()).optional()
+      }).optional(),
+      aliases: external_exports.record(external_exports.string()).optional()
+    }).describe("The config fields to write.")
+  },
+  async ({ level, space_slug, mode, memory_config }) => {
+    try {
+      const result = await request(cfg(), "POST", "/api/memory-schema", {
+        action: mode ?? "merge",
+        level: level ?? "space",
+        spaceSlug: space_slug,
+        memory_config
+      });
+      return ok(result);
+    } catch (e) {
+      return fail("Failed to write memory schema.", explain(e));
+    }
+  }
+);
 var resolvedBaseUrl = await resolveBaseUrl();
 KH_API_BASE_URL = resolvedBaseUrl.url;
 KH_API_BASE_SOURCE = resolvedBaseUrl.source;
