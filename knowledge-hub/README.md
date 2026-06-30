@@ -20,6 +20,13 @@ the user, then fixes what's in canon scope (docs + tools) and escalates platform
 issues to the Knowledge Hub team. It auto-triggers on feedback-triage intent and
 replaces the former `/triage-feedback` command (single entry point, no overlap).
 
+And the **`site-to-sales-kb`** skill: when an onboarding user gives a **website
+URL** instead of files, this skill crawls the site and produces a structured,
+source-linked Markdown sales knowledge base (catalog, pricing, promos, locations,
+B2B, policies, support, brand voice). Onboarding's "website mode" then splits that
+output into atomic wiki docs. It's generic (any category-navigated e-commerce/
+services site) and uses `haiku` subagents for the repetitive extraction.
+
 ## Layout
 
 ```
@@ -29,6 +36,8 @@ commands/
   onboard.md                   # The /onboard slash command + interview script
 skills/
   feedback-triage/SKILL.md     # Navigate + triage agent feedback; fix canon, escalate SaaS
+  site-to-sales-kb/SKILL.md    # Crawl a website → structured sales KB for the onboarding wiki
+    reference/                 #   canonical doc schema + verification checklist
 hooks/
   sync-canon.sh                # PreToolUse wrapper
   sync_canon.py                # Pull-once-per-session worker
@@ -86,7 +95,9 @@ Two tokens, two purposes:
 ## Invariants
 
 - The command's interview calls **only** the Knowledge Hub MCP tools. No web
-  fetches, shell commands, or other tools during onboarding.
+  fetches, shell commands, or other tools during onboarding. Two sanctioned
+  exceptions: the Tool Builder validation gate (§5a) and **website mode** (§3),
+  where the `site-to-sales-kb` skill crawls the user-supplied URL.
 - Every submitted doc opens with YAML router front matter:
   `purpose`, `read_when`, `read_full`, `depends_on`, and `code`.
 - Every submitted doc passes the server-side linter: front matter,

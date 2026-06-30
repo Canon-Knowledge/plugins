@@ -99,10 +99,12 @@ All from the `knowledge-hub-onboarding` MCP server:
 - `complete_onboarding()` — finalize, mint read/write tokens.
 
 Default interview rule: do not call other tools, web fetches, or shell commands.
-Exception: during the Tool Builder validation workflow in section 5a, you may use
-the minimum additional tools needed to inspect and test the target integration,
-preferably via a dedicated subagent when Claude Code offers one. Never expose
-secrets in files, docs, logs, or visible examples.
+Exceptions: (1) during the Tool Builder validation workflow in section 5a, you may
+use the minimum additional tools needed to inspect and test the target
+integration, preferably via a dedicated subagent when Claude Code offers one;
+(2) in **website mode** (section 3), the `site-to-sales-kb` skill crawls the
+user-supplied URL — that skill owns its own web-fetch/subagent budget. Never
+expose secrets in files, docs, logs, or visible examples.
 
 ## Flow
 
@@ -124,11 +126,22 @@ A **Space** is the project (or bot boundary) a set of docs belongs to.
 Each Space maps to a `scope` slug. Different projects → different Spaces;
 different bots → different Spaces.
 
-First, call `list_spaces` to see what already exists. Then ask:
+First, call `list_spaces` to see what already exists. Then present this as a
+clearly separated **Your turn** block (never bury it after tool narration):
 
-> What do you want to map in this context? Examples: an entire company,
-> a specific area, a project, a product launch, a brand, something
-> personal — or describe something else.
+> ## Your turn — define the agent context
+>
+> | Question | Required? |
+> |---|---|
+> | What do you want to map? | Yes |
+> | What is the agent's identity or job? | Optional, recommended |
+> | How should it sound? | Optional, recommended |
+> | What must it never invent, expose, or do? | Optional, recommended |
+>
+> Examples for the first answer: an entire company, a specific area, a
+> project, a product launch, a brand, or something personal. Answer in one
+> message. If identity, tone, or guardrails already exist in source files,
+> say so and they will be extracted.
 
 Wait for the answer. Then:
 
@@ -148,12 +161,40 @@ the user means, ask before writing.
 
 Call `emit_event("scope_framed", { scope, kind })`.
 
+When the first document creates a new Space, call
+`emit_event("space_created", { scope, name: space_name })` exactly once.
+
 ### 3. Detect input mode
 
 Look at the conversation context. If the user has already attached or
 referenced documents (PDFs, spreadsheets, decks, planning docs, design
-files, code, transcripts), you are in **extraction mode**. Otherwise
+files, code, transcripts), you are in **extraction mode**. If the user gives a
+**website URL** as the thing to map, you are in **website mode**. Otherwise
 you are in **interview mode**. Mixed is common.
+
+#### Website mode
+
+When the user's input is a URL (a company site, store, or service domain), do
+**not** crawl it by hand. Invoke the **`site-to-sales-kb`** skill — it discovers
+the site, fetches every page (handling pagination), extracts the sales-relevant
+fields (catalog, pricing, promos, locations, B2B, policies, support, brand voice,
+objection handling), and writes structured source Markdown.
+
+1. Run `site-to-sales-kb` with the URL. Let it produce its compiled
+   `00-knowledge-base.md` plus per-section files.
+2. Treat that output as **source**, not as the final wiki. Split it into atomic,
+   front-mattered wiki docs (the skill's `reference/esquema-documento.md` gives
+   the section → wiki-doc → `read_full` mapping): identity/USPs/tone-of-voice and
+   guardrails become `read_full: true`; catalog/pricing/locations/FAQ/policies
+   stay `read_full: false`, pulled on demand via `read_when`.
+3. Propose the wiki tree from that mapping, show it, get sign-off, then write
+   the docs via `submit_draft_document` following section 4's style.
+4. Surface the skill's "notes for whoever trains the bot" (known gaps, JS-only
+   pages, count discrepancies) to the user — those are not wiki docs.
+5. At wrap-up, offer to schedule a periodic re-crawl (price/stock/locations
+   change) as an optional next step.
+
+Continue with section 4 onward exactly as in the other modes.
 
 #### Extraction mode
 
@@ -265,6 +306,17 @@ Before writing, make sure the agreed tree includes **at least one
 `read_full: true` doc** for the Space (identity/scope, tone of voice,
 guardrails — see rule 0). If the user didn't mention these, propose them.
 
+Before submitting any documents, show a mandatory **Agent behavior review**
+with the exact proposed content for:
+
+1. Identity and scope.
+2. Tone of voice, including language and do/don't examples.
+3. Guardrails and data rules.
+
+Ask the user to approve or request edits. Do not infer approval from silence
+and do not publish until the user explicitly approves. After approval, call
+`emit_event("personality_reviewed", { scope })`.
+
 For each file in the agreed tree:
 
 1. Compose the **front-matter block** (`purpose`, `read_when`, `read_full`,
@@ -283,6 +335,9 @@ For each file in the agreed tree:
    you supplied `template_slug`), either fix the doc or drop the
    template_slug and resubmit.
 6. `emit_event("doc_documented", { document_id, scope, doc_type, title })`.
+
+Include `{ index, total }` in that event when the tree size is known so the UI
+can render `Documents created: N/total`.
 
 ### 5a. Identify, validate, and create conversational tools
 
@@ -446,11 +501,19 @@ a wiki doc.
    `register_asset` only records metadata — it never transfers the file's
    bytes. Every registered asset shows **"pending upload"** in `/app/files`
    until the user drops the actual file there. This is unrelated to
-   visibility: `internal` and `shareable` assets are *both* "pending upload"
-   until bytes arrive (visibility only controls whether the link is exposed
-   in user-facing markdown, not upload state). The link goes live the moment
-   the upload completes. At wrap-up (section 8), list the files still pending
-   so the user knows the manual upload step remains.
+  visibility: `internal` and `shareable` assets are *both* "pending upload"
+  until bytes arrive (visibility only controls whether the link is exposed
+  in user-facing markdown, not upload state). The link goes live the moment
+  the upload completes. At wrap-up (section 8), list the files still pending
+  so the user knows the manual upload step remains.
+- `upload_asset_file({ asset_id, local_path, consent_confirmed: true })` uploads
+  the bytes for a registered asset directly. Before every call, name the exact
+  file and destination asset and obtain explicit user approval. Never infer
+  consent from the file being attached or mentioned. Use `/app/files` as the
+  fallback when direct upload is unavailable.
+6. For each file awaiting bytes, call
+   `emit_event("asset_pending_upload", { asset_id, filename, scope })`. This is
+   a persistent user action in the SaaS, not merely a chat reminder.
 
 ### 6b. Wiki page for living refs (when worth it)
 
@@ -478,10 +541,24 @@ scopes unless the user explicitly wants team scoping.
 
 ### 8. Wrap
 
-1. Call `complete_onboarding`. Capture `knowledge_base_url`.
-2. Tell the user: "Done. Your wiki is live. Head to <knowledge_base_url>
+1. **Memory is required, not an optional next step.** Before completion,
+   discuss what the conversational agent should remember about each end user.
+   Cover useful fact categories, retention expectations, sensitive facts that
+   must never be stored, and how users can correct/delete memory. Show the
+   proposed memory design and get explicit approval. Apply the same workflow
+   as `/knowledge-hub:design-memory <scope>`; do not offer it as a later
+   suggestion. If the memory tools are unavailable in this MCP session, record
+   the approved design as a small governed wiki doc and clearly mark the
+   schema application as pending rather than silently skipping it.
+2. Call `emit_event("memory_configured", { scope })` only after the memory
+   design is approved and applied or its pending application is explicit.
+3. Summarize persistent user actions, especially assets still awaiting upload.
+   Keep live/API integration ideas (calendar, inventory, availability) under
+   **Optional next steps**; never put memory there.
+4. Call `complete_onboarding`. Capture `knowledge_base_url`.
+5. Tell the user: "Done. Your wiki is live. Head to <knowledge_base_url>
    to open the knowledge base."
-3. Stop.
+6. Stop.
 
 ## Failure modes
 

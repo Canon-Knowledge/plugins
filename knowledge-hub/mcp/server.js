@@ -21388,7 +21388,7 @@ function explain(e) {
 }
 var server = new McpServer({
   name: "knowledge-hub-onboarding",
-  version: "0.3.1"
+  version: "0.3.2"
 });
 server.tool(
   "verify_token",
@@ -21414,6 +21414,10 @@ server.tool(
           JSON.stringify({ api_base_url: KH_API_BASE_URL }, null, 2),
           { mode: 384 }
         );
+        await saveTokenFile(path.join(dir, "onboarding-token.json"), {
+          token,
+          expires_at: null
+        });
       } catch {
       }
       return ok({
@@ -21710,6 +21714,41 @@ server.tool(
   })
 );
 server.tool(
+  "upload_asset_file",
+  "Upload a local file to a previously registered Knowledge Hub asset. Call only after the user explicitly approves uploading this exact file. The local path is never sent to the SaaS; only bytes, filename, MIME type, size, and checksum are transmitted.",
+  {
+    asset_id: external_exports.string().uuid(),
+    local_path: external_exports.string().min(1).describe("Absolute path to the exact local file approved by the user."),
+    consent_confirmed: external_exports.literal(true).describe("Must be true only after explicit user approval for this file and asset.")
+  },
+  instrument("upload_asset_file", async ({ asset_id, local_path }) => {
+    try {
+      const fs = await import("node:fs/promises");
+      const path = await import("node:path");
+      if (!path.isAbsolute(local_path)) return fail("Upload requires an absolute local_path.");
+      const stat = await fs.stat(local_path);
+      if (!stat.isFile()) return fail("The approved path is not a file.");
+      const maxBytes = 25 * 1024 * 1024;
+      if (stat.size > maxBytes) return fail(`File exceeds the ${maxBytes} byte upload limit.`);
+      const bytes = await fs.readFile(local_path);
+      const form = new FormData();
+      form.set("file", new Blob([bytes]), path.basename(local_path));
+      const session = getSession();
+      const url = `${KH_API_BASE_URL.replace(/\/$/, "")}/api/assets/${encodeURIComponent(asset_id)}/upload`;
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${session.token}` },
+        body: form
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) throw new ApiError(response.status, body);
+      return ok(body);
+    } catch (e) {
+      return fail("Asset upload failed.", explain(e));
+    }
+  })
+);
+server.tool(
   "complete_onboarding",
   "Finalize the interview. Revokes the onboarding token and returns a long-lived read_canon token for the sync hook.",
   {},
@@ -21723,6 +21762,7 @@ server.tool(
       await fs.mkdir(dir, { recursive: true });
       await saveTokenFile(path.join(dir, "canon-token.json"), result.tokens.read_canon);
       await saveTokenFile(path.join(dir, "write-token.json"), result.tokens.write_docs);
+      await fs.rm(path.join(dir, "onboarding-token.json"), { force: true });
       setSession({ ...getSessionSafe(), token: result.tokens.write_docs.token });
       return ok({
         interview_complete: result.interview_complete,
@@ -21757,7 +21797,8 @@ async function autoLoadWriteToken() {
     const dir = path.join(home, ".config", "knowledge-hub");
     const filePath = path.join(dir, "write-token.json");
     const legacy = path.join(dir, "write-token");
-    let data = await readTokenFile(filePath) ?? await readTokenFile(legacy);
+    const onboarding = path.join(dir, "onboarding-token.json");
+    let data = await readTokenFile(onboarding) ?? await readTokenFile(filePath) ?? await readTokenFile(legacy);
     if (!data?.token) return;
     let token = data.token;
     if (expiresSoon(data.expires_at)) {
